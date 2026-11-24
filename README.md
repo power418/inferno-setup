@@ -1,348 +1,165 @@
 # Inferno Automation
 
-> Automated setup scripts for [Inferno](https://github.com/ChefKissInc/Inferno) — iPhone 11 emulator for Linux.
+Automation scripts for [Inferno](https://github.com/ChefKissInc/Inferno) — an iPhone 11 / XR (t8030) emulator built from a heavily modified QEMU.
+
+> These scripts target the **current** Inferno checkout, which uses **xmake** (`inferno-aarch64`, `inferno-img`). The old `configure && make` / companion-VM flow does not work with this source tree.
 
 ## Prerequisites
 
 | Item | Description |
 |------|-------------|
-| **CPU** | x86_64 with KVM support (Intel VT-x / AMD-V) |
-| **RAM** | 8 GB minimum (4 GB for main VM + 2 GB for companion) |
-| **Storage** | 45 GB free space |
-| **OS** | Linux (Arch-based or Debian-based) |
+| CPU | x86_64, ideally AVX2 (12th-gen Intel here). No system QEMU needed — Inferno is built from source. |
+| RAM | 8 GB minimum (4 GB for the emulated iPhone) |
+| Storage | ~45 GB free (IPSW alone is ~5.5 GB) |
+| OS | Arch-based (CachyOS tested) or Debian/Ubuntu |
+| Tools | `git`, `curl`/`wget`, `cmake`, `python3`, `sudo` for system packages |
 
-Supported devices:
-- iPhone 11 (`iPhone12,1` / `n104ap`)
-- iPhone XR (`iPhone11,8` / `n841ap`)
+Supported devices: iPhone 11 (`iPhone12,1` / `n104ap`) and iPhone XR (`iPhone11,8` / `n841ap`) with iOS 14.0 18A5351d by default.
 
----
+## What gets installed
 
-## Quick Start
+- System dependencies via `pacman`/`apt` (glib2, nettle, libtasn1, lz4, gnutls, libpng, libyuv, zstd, …).
+- `xmake` (system package, with a `~/.local` fallback installer).
+- [lzfse](https://github.com/lzfse/lzfse) built locally into `.local/` (xmake requires it for DMG support).
+- [SimulatedSigningServer](https://git.chefkiss.dev/AppleHax/SimulatedSigningServer.git) — the fake Tatsu signing server.
+- Optional: patched [idevicerestore](https://github.com/VisualEhrmanntraut/idevicerestore) + libimobiledevice suite.
+- VirtualHere console client + `usbip`/`vhci-hcd` kernel modules, so the emulated iPhone appears as a real USB device to `idevicerestore`.
+- `usbmuxd` (started by `./run.sh usb`) so `idevicerestore` can talk to the device once it enters Restore mode.
 
-### 1. Clone & Configure
-
-```bash
-git clone https://github.com/YOUR_USER/inferno-automation.git
-cd inferno-automation
-```
+## Configuration
 
 Edit `config.env`:
-- Set `IPSW_URL` to your IPSW download link
-- Set `SEP_IV_KEY` (get from [The Apple Wiki](https://theapplewiki.com))
-- Set `SEP_ROM_URL` (get from [securerom.fun](https://securerom.fun))
 
-### 2. Run Full Setup
+- `IPSW_URL` / `IPSW_FILENAME` — any supported IPSW (default URL still works).
+- `SEP_ROM_NAME` — keep `AppleSEPROM-Cebu-B1`; place the ROM in `InfernoData/` or set `SEP_ROM_URL` (get it from [securerom.fun](https://securerom.fun)).
+- `SEP_IV_KEY` — IV+Key of the IPSW's SEP firmware, concatenated with no spaces ([The Apple Wiki](https://theapplewiki.com)). Needed for restore.
+- `MAIN_SMP`, `MAIN_RAM`, `DISPLAY_ARGS` — tune if needed.
+
+## Setup
 
 ```bash
+./setup.sh deps          # installs system packages (sudo password prompt)
+./setup.sh all           # bootstrap + build + disks + SSS + firmware + IPSW + tools
+```
+
+To skip the 5.5 GB download or the libimobiledevice build:
+
+```bash
+SKIP_IPSW=1 SKIP_RESTORE_TOOLS=1 ./setup.sh all
+```
+
+Individual steps are also available: `bootstrap`, `viewer`, `usb`, `build`, `disks`, `ipsw`, `firmware`, `sss`, `restore-tools`, `check`. `viewer` installs a local TigerVNC viewer (no sudo) so `./run.sh view` can open the screen. `usb` loads `usbip-core`/`vhci-hcd`, installs the VirtualHere client to `/usr/local/bin` (it needs root; polkit refuses binaries under `$HOME`), and adds an Apple USB udev rule so `idevicerestore` can access both DFU (`05ac:1227`) and Recovery (`05ac:1281`) modes.
+
+What `all` produces:
+
+| Path | Purpose |
+|------|---------|
+| `Inferno/` | Inferno source + xmake build output |
+| `InfernoData/root` etc. | 9 raw disk images (32 GB root + firmware/nvram/…) |
+| `InfernoData/<IPSW>.ipsw` | Restore IPSW |
+| `InfernoData/AppleSEPROM-Cebu-B1` | SEP ROM |
+| `SimulatedSigningServer/` | SSS source + build |
+| `.local/` | lzfse, optional idevicerestore |
+
+## Run
+
+One command does setup, starts both services, attaches USB, and runs restore:
+
+```bash
+cd ~/Desktop/inferno-setup
 ./setup.sh all
 ```
 
-This will:
-- Install dependencies (auto-detects Arch/Debian)
-- Clone & build Inferno (QEMU fork)
-- Create all required disk images
-- Download & extract IPSW
-- Create AP ticket
-- Prepare SEP firmware (if `SEP_IV_KEY` is set)
-
-### 3. Setup Companion VM
+Already set up (e.g. after a reboot)? Skip straight to the same one-shot run:
 
 ```bash
-# Boot companion installer
-./setup.sh companion
-# Follow interactive Arch Linux installation
-# After installation, boot companion with SSH:
-./run.sh companion
-# In another terminal, build tools inside companion:
-./setup.sh companion-tools
+./run.sh all
 ```
 
-### 4. Boot & Restore
+Logs: `/tmp/opencode/sss.log` and `/tmp/opencode/main.log`.
 
-**Terminal 1** — Boot companion with USB passthrough:
+Set `SKIP_RESTORE=1` to only bring up the services (useful for debugging):
 ```bash
-./run.sh companion
+SKIP_RESTORE=1 ./run.sh all
 ```
 
-**Terminal 2** — Boot iPhone emulator:
+To view the screen while it runs, open another terminal:
 ```bash
+./run.sh view
+```
+
+`./run.sh view` opens `vncview.py`, a small GTK3 viewer that scales the 832×1792 iPhone screen to fit your monitor (aspect ratio kept, window resizable). Mouse click/drag = touch. It needs `python-gobject` + GTK3. Use `VIEWER=tiger ./run.sh view` to fall back to TigerVNC (no scaling).
+
+Manual/three-terminal mode is still available:
+
+```bash
+# 1. Fake signing server
+./run.sh sss
+
+# 2. Emulated iPhone (VirtualHere USB uplink defaults to 127.0.0.1:8030)
 ./run.sh main
+
+# 2b. Attach the emulated iPhone over VirtualHere (auto-called by restore too)
+./run.sh usb
+
+# 3. Print or run the restore command
+./run.sh restore      # print it
+./run.sh restore-now  # execute it directly
 ```
 
-**Terminal 1 (in companion)** — Run restore:
-```bash
-idevicerestore --erase --restore-mode \
-  -i 0x1122334455667788 \
-  /root/iPhone11,8,iPhone12,1_14.0_18A5351d_Restore.ipsw \
-  -T /root/root_ticket.der
-```
-
----
-
-## Step-by-Step Guide
-
-### Host Setup
-
-Dependencies by distribution:
-
-| Distribution | Command |
-|-------------|---------|
-| **Arch Linux** | `sudo pacman -S git glib2 dtc pixman zlib libtasn1 meson ninja base-devel cmake gnutls pkgconf sdl2 libssh gtk3 lzfse` |
-| **Debian/Ubuntu** | `sudo apt-get install -y build-essential libtool meson ninja-build pkg-config device-tree-compiler libglib2.0-dev gnutls-bin libjpeg-turbo8-dev libpng-dev libslirp-dev libssh-dev libusb-1.0-0-dev liblzo2-dev libncurses5-dev libpixman-1-dev libsnappy-dev vde2 zstd libzstd-dev libgnutls28-dev libgmp10 libgmp3-dev lzfse liblzfse-dev libgtk-3-dev libsdl2-dev` |
-
-> **Note:** Some distros ship Nettle < 3.10. The script builds it from source automatically.
-
-### Python Setup (for Ticket Scripts)
-
-Install via system packages:
-
-| Distribution | Command |
-|-------------|---------|
-| **Arch Linux** | `sudo pacman -S python python-pip python-pyasn1 python-pyasn1-modules` |
-| **Debian/Ubuntu** | `sudo apt-get install -y python3 python3-pip python3-pyasn1 python3-pyasn1-modules` |
-
-Or use a virtual environment (recommended if packages aren't available):
+`./run.sh restore` only prints the command; `./run.sh restore-now` (used by `all`) executes it:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip3 install pyasn1 pyasn1-modules
+idevicerestore --erase -i 0x1122334455667788 \
+  InfernoData/iPhone11,8,iPhone12,1_14.0_18A5351d_Restore.ipsw \
+  -s http://127.0.0.1:8031/ \
+  --sep-key "IVKEY" --dev-as-ap
 ```
 
-The `setup.sh` script handles this automatically with `./setup.sh python`.
+### Required: filesystem patches after restore
 
-### Building Inferno
+After a successful restore you **must** apply the filesystem patches before booting normally. They include the software-rendering patches for the dyld shared cache; without them iOS boots (launchd, keybag, etc. in the log) but the screen stays **completely black**.
+
+Stop the emulator first (the root image must not be in use), then:
 
 ```bash
-git clone https://github.com/ChefKissInc/Inferno
-cd Inferno
-git submodule update --init
-mkdir build && cd build
-../configure --target-list=aarch64-softmmu,x86_64-softmmu \
-  --enable-lzfse --enable-slirp --enable-curses --enable-libssh \
-  --enable-virtfs --enable-zstd --enable-nettle --enable-gnutls \
-  --enable-gtk --enable-sdl --disable-werror \
-  --disable-qom-cast-debug --disable-debug-info
-make -j$(nproc)
+pkill -TERM -x inferno-aarch64   # graceful stop; avoid kill -9 (SEP state)
+./run.sh fs-patch                # ends with "Changes applied successfully."
+./run.sh main                    # boot again
+./run.sh view                    # in another terminal
 ```
 
-### File Setup
+`inferno-fs-patcher --revert` undoes the patches; `--dry-run` shows them without writing.
 
-#### Disk Images
+## Useful details
 
-| File | Size | Purpose |
-|------|------|---------|
-| `root` | 32 GB | Main OS data partition |
-| `firmware` | 8 MB | Firmware storage |
-| `syscfg` | 128 KB | System configuration |
-| `ctrl_bits` | 8 KB | Control bits |
-| `nvram` | 8 KB | NVRAM storage |
-| `effaceable` | 4 KB | Effaceable storage |
-| `panic_log` | 1 MB | Panic log storage |
-| `sep_nvram` | 64 KB | SEP NVRAM |
-| `sep_ssc` | 128 KB | SEP SSC |
-
-#### IPSW Extraction
-
-```bash
-mkdir Restore
-unzip iPhone11,8,iPhone12,1_14.0_18A5351d_Restore.ipsw -d Restore
-# Delete largest DMG to save space (~5 GB)
-rm Restore/*.dmg
-```
-
-#### Creating AP Ticket
-
-```bash
-# Activate venv first (if using venv)
-source venv/bin/activate
-
-# Download scripts
-wget https://chefkiss.dev/Extras/Inferno/create_apticket.py
-wget https://chefkiss.dev/Extras/Inferno/ticket.shsh2
-
-# Generate ticket
-python3 create_apticket.py n104ap Restore/BuildManifest.plist ticket.shsh2 root_ticket.der
-```
-
-> **Important:** Do not modify the generated ticket. It's required for all boot stages.
-
-#### SEP Firmware Preparation
-
-1. Get the SEP ROM from [securerom.fun](https://securerom.fun) (must be `Cebu B1` for t8030)
-
-2. Build img4lib:
-```bash
-git clone https://github.com/xerub/img4lib
-cd img4lib && make
-```
-
-3. Create SEP ticket:
-```bash
-wget https://chefkiss.dev/Extras/Inferno/create_septicket.py
-python3 create_septicket.py n104ap Restore/BuildManifest.plist ticket.shsh2 sep_root_ticket.der
-```
-
-4. Decrypt & repackage SEP firmware (get IV+Key from [The Apple Wiki](https://theapplewiki.com)):
-```bash
-img4lib/img4 -v -i Restore/Firmware/all_flash/sep-firmware.n104.RELEASE.im4p \
-  -o sep-firmware.n104.RELEASE -k IVKEY
-img4lib/img4 -A -F -o sep-firmware.n104.RELEASE.new.img4 \
-  -i sep-firmware.n104.RELEASE \
-  -M sep_root_ticket.der -T rsep -V VERSION
-```
-
-> Replace `IVKEY` with IV and Key concatenated (no spaces). Replace `VERSION` with output from first command.
-
-### Companion VM Setup
-
-The companion VM provides USB connectivity to the emulated iPhone. It runs a lightweight Linux distro with `libimobiledevice` tools.
-
-#### Arch Linux Installation
-
-```bash
-qemu-system-x86_64 -accel kvm -cpu host -M q35 -m 2G -smp 2 \
-  -drive file=companion.raw,format=raw,if=virtio \
-  -cdrom archlinux.iso \
-  -nic user,model=virtio-net-pci \
-  -serial mon:stdio
-```
-
-Follow standard Arch installation inside the VM:
-- Partition: single ext4 root partition
-- Install `base base-devel linux linux-firmware grub dhcpcd openssh sshpass`
-- Set root password
-- Enable `sshd` and `dhcpcd`
-- Install GRUB: `grub-install /dev/sda && grub-mkconfig -o /boot/grub/grub.cfg`
-
-#### Building libimobiledevice Tools
-
-Build order (each with `./autogen.sh && make -j$(nproc) && make install`):
-
-| Repo | Description |
-|------|-------------|
-| [libplist](https://github.com/libimobiledevice/libplist) | Apple property list parser/generator |
-| [libusbmuxd](https://github.com/libimobiledevice/libusbmuxd) | USB multiplexing library |
-| [libimobiledevice-glue](https://github.com/libimobiledevice/libimobiledevice-glue) | Common library |
-| [libtatsu](https://github.com/libimobiledevice/libtatsu) | Apple authentication library |
-| [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice) | Main library |
-| [libirecovery](https://github.com/libimobiledevice/libirecovery) | iDevice recovery library |
-| [usbmuxd](https://github.com/libimobiledevice/usbmuxd) | USB multiplexer daemon |
-| [idevicerestore](https://github.com/libimobiledevice/idevicerestore) | Restore tool |
-
-#### idevicerestore Patch
-
-Apply the [Inferno patch](https://chefkiss.dev/Extras/Inferno/idevicerestore.patch):
-
-```bash
-cd idevicerestore
-curl -LO https://chefkiss.dev/Extras/Inferno/idevicerestore.patch
-git apply idevicerestore.patch
-./autogen.sh && make -j$(nproc) && make install
-ldconfig
-```
-
----
-
-## Running
-
-### Companion VM (with USB passthrough)
-
-```bash
-./run.sh companion
-```
-
-This starts the companion with the `usb-tcp-remote` device that connects to the main VM.
-
-### Main VM (iPhone Emulator)
-
-```bash
-./run.sh main
-```
-
-Boot command breakdown:
-
-| Flag | Description |
-|------|-------------|
-| `-M t8030` | Machine type (iPhone 11 SoC) |
-| `trustcache=...` | Trust cache for kernel |
-| `ticket=root_ticket.der` | AP ticket for iBoot |
-| `sep-fw=...` | SEP firmware |
-| `sep-rom=...` | SEP ROM (Cebu B1) |
-| `kaslr-off=true` | Disable KASLR for debugging |
-| `-kernel` | Research kernel cache |
-| `-dtb` | Device tree blob |
-| `-append` | Kernel boot arguments |
-| `-initrd` | RAM disk (Erase or Upgrade) |
-| `-smp 7 -m 4G` | 7 cores, 4 GB RAM |
-
-> **Tip:** For GUI display issues, add `-display gtk,zoom-to-fit=on,show-cursor=on` (Linux) or `-display cocoa,zoom-to-fit=on,zoom-interpolation=on,show-cursor=on` (macOS).
-
-### Running Restore
-
-In the companion VM (after main VM has booted and shows USB connected):
-
-```bash
-idevicerestore --erase --restore-mode \
-  -i 0x1122334455667788 \
-  /root/iPhone11,8,iPhone12,1_14.0_18A5351d_Restore.ipsw \
-  -T /root/root_ticket.der
-```
-
-For restore stage 2 (data migration), apply [filesystem patches](https://chefkiss.dev/guides/inferno/fs-patches/) in the iOS VM.
-
----
+- Current Inferno has no GTK/SDL display on Linux; the official guide runs headless with `-serial mon:stdio`. `DISPLAY_ARGS` is empty by default. The emulator still starts a VNC server on `localhost:5900`, which you can open with any VNC client.
+- `-M t8030,...kaslr-off=true` mirrors the official guide; `usb-uplink-addr` is left at the built-in default (`127.0.0.1:8030`).
+- `./run.sh usb` also turns on VirtualHere **Auto-Use All**. This matters: after iBSS is uploaded the iPhone disconnects and reconnects in Recovery Mode, and auto-use is what attaches the new USB device automatically.
+- No AP ticket, `img4lib`, or companion VM is used by this Inferno version.
+- The old README's `ticket.shsh2`, `create_apticket.py`, and `sep_root_ticket.der` steps are obsolete here.
 
 ## Troubleshooting
 
-### Kernel Panic: "Attempted to kill init!"
-
-Add `-cpu host` to QEMU command. Required for AVX CPU instructions.
-
-### `at24c-eeprom: Backing file size 65536 != 2048`
-
-Fix SEP NVRAM size:
-```bash
-truncate -c -s 64K sep_nvram
-```
-
-### Stuck near "skipping unencrypted volume" or "SEP accepted IMG4"
-
-Restart the emulator. May take multiple attempts.
-
-### Home/App Switcher gesture broken
-
-Trigger SOS/power-off screen, then either:
-1. Tap X to close, double-press Home → App Switcher → swipe Setup away
-2. Slide to power off, restart emulator
-
-### IDE Device Not Found
-
-Ensure companion starts BEFORE main VM. The main VM connects to the companion, not the other way around.
-
-### USB Connection Issues
-
-- Use UNIX sockets (default) on Linux
-- Only one USB controller on main VM
-- No XHCI controller (unsupported)
-- Check `lsusb` in companion
-
----
+| Symptom | Fix |
+|---------|-----|
+| `liblzfse is required` during xmake configure | `./setup.sh bootstrap`, then re-run `./setup.sh build` |
+| `nettle >= 3.10` error | `./setup.sh deps` (script builds 3.10 locally on older distros) |
+| Emulator shows no USB device | `./setup.sh usb` then `./run.sh usb`; check `lsusb -d 05ac:` and `sudo -n /usr/local/bin/vhclient -t LIST` |
+| `Unable to discover device mode` | Check `lsusb -d 05ac:`; if the node is `crw-rw-r--`, re-run `./setup.sh usb` (Apple udev rule) |
+| `Device did not reconnect ... Possibly invalid iBSS` | Make sure VirtualHere `Auto-Use All` is on (`./run.sh usb`), then retry |
+| Screen is black after restore, log shows normal launchd boot | Filesystem patches missing: stop the emulator, `./run.sh fs-patch`, boot again |
+| `SEP Panic: :sars/sars` / `wdog panic` early in boot | SEP state got inconsistent after a hard kill; stop gracefully (SIGTERM) next time and boot again |
+| VNC window taller than the monitor | Use `./run.sh view` (scaled viewer) instead of TigerVNC |
+| Restore fails signing | Confirm `./run.sh sss` is listening on `SSS_PORT` (8031) |
+| `idevicerestore: command not found` | `./setup.sh restore-tools` |
+| SEP errors | Check the ROM is Cebu B1 and `SEP_IV_KEY` matches the IPSW |
 
 ## Reference
 
-| Component | Source |
-|-----------|--------|
-| Inferno QEMU fork | [github.com/ChefKissInc/Inferno](https://github.com/ChefKissInc/Inferno) |
-| Official guide | [chefkiss.dev/guides/inferno](https://chefkiss.dev/guides/inferno/) |
-| IPSW downloads | [ipsw.me](https://ipsw.me) / [The Apple Wiki](https://theapplewiki.com) |
-| SEP ROM dumps | [securerom.fun](https://securerom.fun) |
-| IV/Keys | [The Apple Wiki](https://theapplewiki.com) |
-| libimobiledevice | [github.com/libimobiledevice](https://github.com/libimobiledevice) |
-| Support | [Telegram](https://t.me/+Bx3MO9Hq8whhNzk9) |
+- Inferno source: <https://github.com/ChefKissInc/Inferno>
+- Official guide: <https://chefkiss.dev/guides/inferno/>
+- SEP ROM dump used here (A13 / Cebu B1): <https://securerom.fun/resources/SEPROM/AppleSEPROM-Cebu-B1>
+- IV/Key for iOS 14.0 beta 5 (18A5351d, iPhone 11): <https://theapplewiki.com/wiki/Keys:AzulSeed_18A5351d_(iPhone12,1)> — already filled into `config.env` as `SEP_IV_KEY`.
 
----
-
-## License
-
-Scripts are provided as-is for educational purposes. Respect Apple's EULA — do not share IPSW files, decrypted firmware, or modification tools.
+Respect Apple's EULA — do not share IPSWs, decrypted firmware, or keys.
