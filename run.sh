@@ -24,7 +24,9 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 err()   { echo -e "${RED}[ERR]${NC} $1" >&2; }
 die()   { err "$1"; exit 1; }
 
-LOG_DIR="${TMPDIR:-/tmp}/opencode"
+# Per-user log dir: /tmp/opencode may contain root-owned logs from an earlier
+# root run, which would make the redirection in start_sss_bg fail.
+LOG_DIR="${INFERNO_LOG_DIR:-${TMPDIR:-/tmp}/inferno-setup-$UID}"
 SSS_PORT="${SSS_PORT:-8031}"
 USB_PORT="8030"
 RESTORE_MARKER="$ROOT_DIR/.restored"
@@ -292,6 +294,24 @@ signal_pids() {
     fi
 }
 
+ensure_log_dir() {
+    mkdir -p "$LOG_DIR" 2>/dev/null || \
+        die "Cannot create log directory $LOG_DIR (set INFERNO_LOG_DIR)"
+    local f
+    for f in sss.log main.log; do
+        if [ -e "$LOG_DIR/$f" ] && [ ! -w "$LOG_DIR/$f" ]; then
+            warn "Removing stale root-owned log: $LOG_DIR/$f"
+            "${ROOT_PREFIX[@]}" rm -f "$LOG_DIR/$f" 2>/dev/null || \
+            { command -v pkexec >/dev/null 2>&1 && \
+              timeout 10 pkexec --disable-internal-agent rm -f "$LOG_DIR/$f" \
+                  >/dev/null 2>&1; } || true
+            if [ -e "$LOG_DIR/$f" ] && [ ! -w "$LOG_DIR/$f" ]; then
+                die "Cannot write $LOG_DIR/$f — set INFERNO_LOG_DIR to a writable directory"
+            fi
+        fi
+    done
+}
+
 alive_pids() {
     local pids="$1" p alive=""
     for p in $pids; do
@@ -338,7 +358,7 @@ start_sss_bg() {
         return
     fi
     info "Starting signing server on $SSS_PORT ..."
-    mkdir -p "$LOG_DIR"
+    ensure_log_dir
     setsid "$SCRIPT_DIR/run.sh" sss >"$LOG_DIR/sss.log" 2>&1 < /dev/null &
     wait_port "$SSS_PORT" || die "Signing server failed to start (see $LOG_DIR/sss.log)"
 }
@@ -355,7 +375,7 @@ start_vm_bg() {
         else
             info "Booting emulator (log: $LOG_DIR/main.log) ..."
         fi
-        mkdir -p "$LOG_DIR"
+        ensure_log_dir
         setsid "$SCRIPT_DIR/run.sh" main >"$LOG_DIR/main.log" 2>&1 < /dev/null &
         # An inconsistent SEP state can panic ~10-15s into boot. Wait long
         # enough to catch it, otherwise attach_usb would blame VirtualHere.

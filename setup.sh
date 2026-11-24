@@ -10,7 +10,7 @@ SSS_DIR="$SCRIPT_DIR/SimulatedSigningServer"
 WORK_DIR="$SCRIPT_DIR/.build-deps"
 LOCAL_PREFIX="${LOCAL_PREFIX:-$SCRIPT_DIR/.local}"
 JOBS="${JOBS:-$(nproc)}"
-LOG_DIR="${TMPDIR:-/tmp}/opencode"
+LOG_DIR="${INFERNO_LOG_DIR:-${TMPDIR:-/tmp}/inferno-setup-$UID}"
 
 # Local tools are visible to xmake/gcc without root.
 export PATH="$LOCAL_PREFIX/bin:$HOME/.local/bin:$PATH"
