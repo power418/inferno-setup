@@ -78,7 +78,7 @@ Already set up (e.g. after a reboot)? Skip straight to the same one-shot run:
 
 Logs: `/tmp/opencode/sss.log` and `/tmp/opencode/main.log`.
 
-Set `SKIP_RESTORE=1` to only bring up the services (useful for debugging):
+Set `SKIP_RESTORE=1` to bring up the services and attach USB without running restore (useful for debugging):
 ```bash
 SKIP_RESTORE=1 ./run.sh all
 ```

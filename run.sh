@@ -467,7 +467,9 @@ run_all() {
     start_vm_bg
 
     if [ "${SKIP_RESTORE:-0}" = "1" ]; then
-        ok "SKIP_RESTORE=1 — services are up, restore skipped"
+        ok "SKIP_RESTORE=1 — restore skipped; attaching USB"
+        attach_usb || return 1
+        info "Open the screen with: ./run.sh view  (VNC 127.0.0.1:5900)"
         return
     fi
     if [ -f "$RESTORE_MARKER" ] && [ "${FORCE_RESTORE:-0}" != "1" ]; then
@@ -493,7 +495,7 @@ usage() {
     echo "  restore-now Run the idevicerestore command directly"
     echo "  fs-patch    Run inferno-fs-patcher on InfernoData/root"
     echo ""
-    echo "Env: SKIP_RESTORE=1 (services only), FORCE_RESTORE=1 (restore again)."
+    echo "Env: SKIP_RESTORE=1 (services + USB, no restore), FORCE_RESTORE=1 (restore again)."
     echo "Legacy 'companion' mode is no longer used by current Inferno builds."
 }
 
