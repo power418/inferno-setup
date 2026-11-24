@@ -266,6 +266,63 @@ port_open() {
     [[ "$(ss -ltn 2>/dev/null)" == *":${1} "* ]]
 }
 
+# PIDs holding a listening socket (ss needs root to show foreign-owned pids,
+# but the emulator and signing server run as our user).
+port_pids() {
+    local port="$1"
+    ss -ltnp 2>/dev/null | grep ":${port} " | grep -o 'pid=[0-9]*' \
+        | cut -d= -f2 | sort -u || true
+}
+
+signal_pids() {
+    local sig="$1" pids="$2" root="$3"
+    [ -n "$pids" ] || return 0
+    if [ "$root" = "1" ]; then
+        # vhclient runs as root. Try sudo -n first (works when running as root
+        # or with a passwordless sudoers rule), then a non-interactive polkit
+        # authorization, then a plain kill for the root shell case.
+        if ! "${ROOT_PREFIX[@]}" kill "-$sig" $pids 2>/dev/null; then
+            kill "-$sig" $pids 2>/dev/null || \
+            { command -v pkexec >/dev/null 2>&1 && \
+              timeout 10 pkexec --disable-internal-agent kill "-$sig" $pids \
+                  >/dev/null 2>&1; } || true
+        fi
+    else
+        kill "-$sig" $pids 2>/dev/null || true
+    fi
+}
+
+alive_pids() {
+    local pids="$1" p alive=""
+    for p in $pids; do
+        ps -p "$p" >/dev/null 2>&1 && alive="$alive $p"
+    done
+    printf '%s' "${alive# }"
+}
+
+# Prefer SIGTERM: a SIGKILL'd emulator leaves SEP state inconsistent and the
+# next boot panics (which also takes the VirtualHere USB uplink down).
+terminate_pids() {
+    local pids="$1" label="$2" root="${3:-0}" i alive
+    [ -n "$pids" ] || return 0
+    info "Stopping $label (PID: ${pids// /, })..."
+    signal_pids TERM "$pids" "$root"
+    for i in $(seq 1 40); do
+        alive="$(alive_pids "$pids")"
+        [ -z "$alive" ] && { ok "$label stopped"; return 0; }
+        pids="$alive"
+        sleep 0.25
+    done
+    warn "$label ignored SIGTERM — sending SIGKILL"
+    signal_pids KILL "$pids" "$root"
+    sleep 0.5
+    if [ -n "$(alive_pids "$pids")" ]; then
+        warn "$label is still running (root-owned processes need sudo/pkexec)"
+        return 1
+    fi
+    return 0
+}
+
 wait_port() {
     local port="$1" i
     for i in $(seq 1 60); do
@@ -321,19 +378,57 @@ ensure_usb_support() {
 }
 
 stop_vm() {
-    port_open "$USB_PORT" || return 0
-    info "Restarting emulator for a clean DFU state..."
-    local pids i
-    pids="$(ss -ltnp 2>/dev/null | grep ":${USB_PORT} " \
-        | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)"
-    if [ -n "$pids" ]; then
-        kill $pids 2>/dev/null || true
+    local pids
+    pids="$({ port_pids "$USB_PORT"; pgrep -x inferno-aarch64; \
+              pgrep -f 'xmake r inferno-aarch64'; } 2>/dev/null \
+            | sort -u | paste -sd' ' -)"
+    terminate_pids "$pids" "emulator"
+}
+
+stop_signing() {
+    local pids
+    pids="$({ port_pids "$SSS_PORT"; pgrep -x SimulatedSigningServer; \
+              pgrep -f 'xmake r SimulatedSigningServer'; } 2>/dev/null \
+            | sort -u | paste -sd' ' -)"
+    terminate_pids "$pids" "signing server"
+}
+
+stop_vhclient() {
+    local pids
+    pids="$(pgrep -x vhclient 2>/dev/null | paste -sd' ' - || true)"
+    [ -n "$pids" ] || return 0
+    if ! terminate_pids "$pids" "VirtualHere client" 1; then
+        warn "Run: sudo $0 stop"
+        return 1
     fi
-    for i in $(seq 1 40); do
-        port_open "$USB_PORT" || return 0
-        sleep 0.25
+}
+
+stop_all() {
+    info "Stopping Inferno services..."
+    local rc=0
+    stop_vhclient || rc=1
+    stop_vm || rc=1
+    stop_signing || rc=1
+
+    # Sockets can linger briefly after the process is gone.
+    local port i
+    for port in "$USB_PORT" "$SSS_PORT"; do
+        for i in $(seq 1 20); do
+            port_open "$port" || break
+            sleep 0.25
+        done
+        if port_open "$port"; then
+            warn "Something is still listening on $port"
+            rc=1
+        fi
     done
-    warn "Emulator is still listening on $USB_PORT"
+
+    if [ "$rc" -eq 0 ]; then
+        ok "All stopped. Start again with: ./run.sh all"
+    else
+        warn "Some services could not be stopped; see the warnings above."
+    fi
+    return "$rc"
 }
 
 run_all() {
@@ -366,9 +461,10 @@ run_all() {
 }
 
 usage() {
-    echo "Usage: $0 [all|sss|main|usb|view|restore|restore-now|fs-patch]"
+    echo "Usage: $0 [all|stop|sss|main|usb|view|restore|restore-now|fs-patch]"
     echo ""
     echo "  all         Start signing server + emulator + USB; restore only if needed"
+    echo "  stop        Gracefully stop emulator, signing server and VirtualHere (USB)"
     echo "  sss         Start SimulatedSigningServer (terminal 1)"
     echo "  main        Boot the emulated iPhone (terminal 2)"
     echo "  usb         Attach the emulated iPhone via VirtualHere client"
@@ -383,6 +479,7 @@ usage() {
 
 case "${1:-help}" in
     all|auto)           run_all ;;
+    stop|kill)          stop_all ;;
     sss|signing-server) signing_server ;;
     main)               main_vm ;;
     usb)                attach_usb ;;

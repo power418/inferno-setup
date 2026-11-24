@@ -123,11 +123,13 @@ After a successful restore you **must** apply the filesystem patches before boot
 Stop the emulator first (the root image must not be in use), then:
 
 ```bash
-pkill -TERM -x inferno-aarch64   # graceful stop; avoid kill -9 (SEP state)
+./run.sh stop                    # graceful SIGTERM for emulator + USB client + signing server
 ./run.sh fs-patch                # ends with "Changes applied successfully."
-./run.sh main                    # boot again
+./run.sh all                     # boot again and re-attach the iPhone over USB
 ./run.sh view                    # in another terminal
 ```
+
+`./run.sh stop` (alias: `./run.sh kill`) stops the emulator, the SimulatedSigningServer and the VirtualHere client. It uses SIGTERM first, so the SEP state stays consistent; SIGKILL is only a fallback for processes that refuse to exit. After `stop`, `./run.sh all` (or `./run.sh main` followed by `./run.sh usb`) brings everything back up, including USB passthrough.
 
 `inferno-fs-patcher --revert` undoes the patches; `--dry-run` shows them without writing.
 
@@ -149,7 +151,7 @@ pkill -TERM -x inferno-aarch64   # graceful stop; avoid kill -9 (SEP state)
 | `Unable to discover device mode` | Check `lsusb -d 05ac:`; if the node is `crw-rw-r--`, re-run `./setup.sh usb` (Apple udev rule) |
 | `Device did not reconnect ... Possibly invalid iBSS` | Make sure VirtualHere `Auto-Use All` is on (`./run.sh usb`), then retry |
 | Screen is black after restore, log shows normal launchd boot | Filesystem patches missing: stop the emulator, `./run.sh fs-patch`, boot again |
-| `SEP Panic: :sars/sars` / `wdog panic` early in boot | SEP state got inconsistent after a hard kill; stop gracefully (SIGTERM) next time and boot again |
+| `SEP Panic: :sars/sars` / `wdog panic` early in boot | SEP state got inconsistent after a hard kill; use `./run.sh stop` (SIGTERM) next time, then boot again |
 | VNC window taller than the monitor | Use `./run.sh view` (scaled viewer) instead of TigerVNC |
 | Restore fails signing | Confirm `./run.sh sss` is listening on `SSS_PORT` (8031) |
 | `idevicerestore: command not found` | `./setup.sh restore-tools` |
