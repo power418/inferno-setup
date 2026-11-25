@@ -16,6 +16,25 @@ Automation scripts for [Inferno](https://github.com/ChefKissInc/Inferno) — an 
 
 Supported devices: iPhone 11 (`iPhone12,1` / `n104ap`) and iPhone XR (`iPhone11,8` / `n841ap`) with iOS 14.0 18A5351d by default.
 
+## macOS (`.command` launchers)
+
+The original `setup.sh` / `run.sh` are Linux-oriented (pacman/apt, udev, usbip/vhci, systemd). For macOS use the double-clickable launchers in Finder, or run them from Terminal:
+
+```bash
+./accel-check.command   # host + accelerator verdict (do this first)
+./setup-mac.command     # MacPorts deps, clone, build, disks, firmware, IPSW
+./run-mac.command       # start signing server + emulator in background
+./run-mac.command main  # emulator in foreground; pass any subcommand explicitly
+./run-mac.command view  # Screen Sharing → VNC 127.0.0.1:5900
+./run-mac.command stop
+```
+
+All logic is in `inferno-mac.command`; the other `.command` files are thin launchers. It installs dependencies with **MacPorts** (`sudo port install`, no Homebrew/udev/kernel modules), builds lzfse locally into `.local/`, initializes the tracked `Inferno` submodule (or clones it from `git.chefkiss.dev/AppleHax/Inferno` when no submodule is configured), and always passes an explicit `-accel` to the emulator. Set `MACPORTS_PREFIX` if your MacPorts prefix is not `/opt/local`; `PORT_SELFUPDATE=1` runs `sudo port selfupdate` first.
+
+**Acceleration reality check:** Inferno only compiles `hvf` on **arm64 macOS** and `kvm` on **arm64 Linux** (`xmake/options.lua`). On an Intel Mac, `sysctl kern.hv_support=1` only means Hypervisor.framework can run **x86_64** guests — it cannot accelerate the ARM64 iPhone guest. So on Intel macOS the only accelerator is **TCG** (software JIT). On native Apple Silicon, `ACCEL=auto` selects HVF; override with `ACCEL=tcg` if needed. `./accel-check.command` prints the verdict and, once built, smoke-tests the binary with `-accel <name> -S`.
+
+USB attach/restore on macOS still needs the VirtualHere client and `idevicerestore` manually; the macOS launcher only brings up the signing server and emulator.
+
 ## What gets installed
 
 - System dependencies via `pacman`/`apt` (glib2, nettle, libtasn1, lz4, gnutls, libpng, libyuv, zstd, …).
