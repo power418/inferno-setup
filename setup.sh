@@ -221,7 +221,19 @@ setup_usb() {
     ok "usbip/vhci + Apple USB udev rule ready"
 }
 
+ensure_inferno() {
+    [ -f "$INFERNO_DIR/xmake.lua" ] && return
+    if [ -d "$SCRIPT_DIR/.git" ]; then
+        info "Inferno submodule not initialized; fetching it now..."
+        git -C "$SCRIPT_DIR" submodule update --init --recursive Inferno \
+            || die "Failed to initialize the Inferno submodule (check network access to git.chefkiss.dev)"
+    fi
+    [ -f "$INFERNO_DIR/xmake.lua" ] \
+        || die "Inferno source not found in $INFERNO_DIR (run: git submodule update --init --recursive)"
+}
+
 bootstrap() {
+    ensure_inferno
     ensure_xmake
     ensure_lzfse
     xmake --version | head -n 1

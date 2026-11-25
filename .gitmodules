@@ -1,0 +1,4 @@
+[submodule "Inferno"]
+	path = Inferno
+	url = https://git.chefkiss.dev/AppleHax/Inferno.git
+	branch = master

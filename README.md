@@ -37,6 +37,16 @@ Edit `config.env`:
 
 ## Setup
 
+Inferno is tracked as a git submodule, so clone recursively (or initialize it later):
+
+```bash
+git clone --recurse-submodules https://github.com/power418/inferno-setup.git
+cd inferno-setup
+# already cloned without it? run: git submodule update --init --recursive
+```
+
+Then:
+
 ```bash
 ./setup.sh deps          # installs system packages (sudo password prompt)
 ./setup.sh all           # bootstrap + build + disks + SSS + firmware + IPSW + tools

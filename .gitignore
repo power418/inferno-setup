@@ -3,7 +3,6 @@
 /.build-deps/
 /.xmake/
 /InfernoData/
-# Upstream source trees cloned by setup.sh (not part of this repo)
-/Inferno/
+# Inferno is a git submodule, see .gitmodules
 /SimulatedSigningServer/
 *.log
