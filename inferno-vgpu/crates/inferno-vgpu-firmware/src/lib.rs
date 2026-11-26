@@ -6,6 +6,8 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod abi;
+pub mod codesign;
 pub mod im4p;
 pub mod inject;
 pub mod macho;

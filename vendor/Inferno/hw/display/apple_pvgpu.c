@@ -50,6 +50,10 @@
 #define IVG_IPC_DOORBELL         7u
 #define IVG_IPC_RESET            8u
 #define IVG_IPC_IRQ_RAISE        11u
+#define IVG_IPC_GET_CAPS         12u
+#define IVG_IPC_GET_CAPS_ACK     13u
+
+_Static_assert(sizeof(ApplePvgpuCaps) == 168, "ApplePvgpuCaps must match wire IvgDeviceCaps");
 
 typedef struct QEMU_PACKED IvgIpcHeader {
     uint32_t msg_type;
@@ -74,6 +78,8 @@ struct ApplePvgpuState {
     int       sock_fd;
     int       region_fd;
     bool      device_lost;
+    bool      has_caps;
+    ApplePvgpuCaps caps;
     uint32_t  pending_irq;
     QemuMutex io_lock;
 };
@@ -370,6 +376,43 @@ static bool apple_pvgpu_connect(ApplePvgpuState* s)
         s->width  = (uint32_t)(ack.arg2 >> 32);
         s->height = (uint32_t)(ack.arg2 & 0xFFFFFFFFu);
     }
+
+    IvgIpcHeader caps_req = {
+        .msg_type = IVG_IPC_GET_CAPS,
+        .arg0     = 0,
+        .arg1     = 0,
+        .arg2     = 0,
+    };
+    if (write_exact_fd(fd, &caps_req, sizeof(caps_req))) {
+        IvgIpcHeader caps_ack;
+        if (read_exact_fd(fd, &caps_ack, sizeof(caps_ack)) && caps_ack.msg_type == IVG_IPC_GET_CAPS_ACK
+            && caps_ack.arg2 == sizeof(ApplePvgpuCaps))
+        {
+            if (read_exact_fd(fd, &s->caps, sizeof(s->caps))) {
+                s->caps.device_name[sizeof(s->caps.device_name) - 1] = '\0';
+                s->has_caps                                          = true;
+            }
+        }
+    }
+    return true;
+}
+
+bool apple_pvgpu_is_connected(const ApplePvgpuState* s)
+{
+    return s != NULL && s->sock_fd >= 0 && !s->device_lost;
+}
+
+uint64_t apple_pvgpu_region_size(const ApplePvgpuState* s)
+{
+    return s != NULL ? s->region_size : 0;
+}
+
+bool apple_pvgpu_get_caps(const ApplePvgpuState* s, ApplePvgpuCaps* out_caps)
+{
+    if (s == NULL || !s->has_caps || out_caps == NULL) {
+        return false;
+    }
+    *out_caps = s->caps;
     return true;
 }
 
@@ -403,8 +446,14 @@ static void apple_pvgpu_realize(DeviceState* dev, Error** errp)
             return;
         }
         qemu_set_fd_handler(s->sock_fd, apple_pvgpu_sock_read, NULL, s);
-        info_report("apple-pvgpu: connected to %s (region=%" PRIu64 " MiB)",
-                    s->socket_path, s->region_size / MiB);
+        if (s->has_caps) {
+            info_report("apple-pvgpu: connected to %s (gpu='%s', vendor=0x%04x, device=0x%04x, region=%" PRIu64 " MiB)",
+                        s->socket_path, s->caps.device_name, s->caps.vendor_id, s->caps.device_id,
+                        s->region_size / MiB);
+        } else {
+            info_report("apple-pvgpu: connected to %s (region=%" PRIu64 " MiB)",
+                        s->socket_path, s->region_size / MiB);
+        }
     } else {
         s->device_lost = true;
         memory_region_init_ram(&s->region_mr, OBJECT(dev), TYPE_APPLE_PVGPU ".region",

@@ -516,17 +516,54 @@ static void t8030_update_device_tree(MachineState* machine, AppleDTNode* root)
     apple_dt_set_prop_u32(node, "low-power-enable", 1);
 
     if (t8030->pvgpu_socket != NULL && t8030->pvgpu_socket[0] != '\0') {
-        AppleDTNode* arm_io = apple_dt_get_node(root, "arm-io");
+        AppleDTNode*     arm_io    = apple_dt_get_node(root, "arm-io");
+        Object*          pvgpu_obj = object_resolve_path_component(OBJECT(t8030), "pvgpu");
+        ApplePvgpuState* pvgpu     = pvgpu_obj != NULL ? APPLE_PVGPU(pvgpu_obj) : NULL;
+        uint64_t         reg_size  = pvgpu != NULL ? apple_pvgpu_region_size(pvgpu) : 0;
+        if (reg_size == 0) { reg_size = 64ULL * MiB; }
+
         assert_nonnull(arm_io);
         node = apple_dt_node_new(arm_io, "inferno-vgpu");
-        apple_dt_set_prop(node, "compatible", sizeof("apple,inferno-pvgpu"), "apple,inferno-pvgpu");
-        static const uint64_t pvgpu_reg[] = {
+        apple_dt_set_prop_str(node, "compatible", "apple,inferno-pvgpu");
+        apple_dt_set_prop_str(node, "device_type", "inferno-vgpu");
+        apple_dt_set_prop_u32(node, "AAPL,phandle", 0x0000F001u);
+
+        const uint64_t pvgpu_reg[] = {
             0x80000000ULL, 0x10000ULL,
             0x80010000ULL, 0x10000ULL,
-            0x90000000ULL, 64ULL * MiB,
+            0x90000000ULL, reg_size,
         };
         apple_dt_set_prop(node, "reg", sizeof(pvgpu_reg), pvgpu_reg);
         apple_dt_set_prop_u32(node, "interrupts", 0x210);
+
+        AppleDTNode* aic_node = apple_dt_get_node(root, "arm-io/aic");
+        if (aic_node != NULL) {
+            uint32_t aic_phandle = apple_dt_get_prop_u32_or(aic_node, "AAPL,phandle", 0, &error_abort);
+            if (aic_phandle != 0) {
+                apple_dt_set_prop_u32(node, "interrupt-parent", aic_phandle);
+            }
+        }
+
+        apple_dt_set_prop_u32(node, "metal-standard", 0x00000100u);
+        apple_dt_set_prop_str(node, "gpu-backend", "metal2vulkan");
+        apple_dt_set_prop_u32(node, "pvgpu-connected", apple_pvgpu_is_connected(pvgpu) ? 1u : 0u);
+        apple_dt_set_prop_u64(node, "region-size", reg_size);
+
+        ApplePvgpuCaps caps;
+        if (apple_pvgpu_get_caps(pvgpu, &caps)) {
+            if (caps.device_name[0] != '\0') {
+                apple_dt_set_prop_str(node, "model", caps.device_name);
+            }
+            apple_dt_set_prop_u32(node, "vendor-id", caps.vendor_id);
+            apple_dt_set_prop_u32(node, "device-id", caps.device_id);
+            apple_dt_set_prop_u32(node, "apple-gpu-family", caps.apple_gpu_family);
+            apple_dt_set_prop_u32(node, "has-unified-memory", caps.has_unified_memory);
+            apple_dt_set_prop_u64(node, "max-buffer-length", caps.max_buffer_length);
+            apple_dt_set_prop_u32(node, "max-threadgroup-memory", caps.max_threadgroup_memory_length);
+            apple_dt_set_prop_u32(node, "read-write-texture-tier", caps.read_write_texture_tier);
+            apple_dt_set_prop_u32(node, "argument-buffers-tier", caps.argument_buffers_tier);
+            apple_dt_set_prop_u32(node, "supports-function-pointers", caps.supports_function_pointers);
+        }
     }
     if (t8030->pvgpu_firmware.valid) {
         inferno_pvgpu_fw_apply_dt(&t8030->pvgpu_firmware, root);
@@ -537,7 +574,15 @@ static void t8030_post_kernel_load(MachineState* machine, MachoHeader64* kc)
 {
     AppleT8030MachineState* t8030 = APPLE_T8030(machine);
     if (t8030->pvgpu_firmware.valid) {
-        inferno_pvgpu_fw_prepare_kernelcache(&t8030->pvgpu_firmware, kc);
+        inferno_pvgpu_fw_prepare_kernelcache(&t8030->pvgpu_firmware, kc, t8030->boot_info.kc_extra_headroom);
+    }
+}
+
+static void t8030_post_trustcache_load(MachineState* machine, uint8_t** trustcache, uint64_t* trustcache_size)
+{
+    AppleT8030MachineState* t8030 = APPLE_T8030(machine);
+    if (t8030->pvgpu_firmware.valid) {
+        (void)inferno_pvgpu_fw_merge_trustcache(&t8030->pvgpu_firmware, trustcache, trustcache_size);
     }
 }
 
@@ -1180,9 +1225,12 @@ static void t8030_init(MachineState* machine)
     t8030->boot_info.patch_virt         = hwaccel_enabled();
     t8030->boot_info.update_device_tree = t8030_update_device_tree;
     t8030->boot_info.post_kernel_load   = t8030_post_kernel_load;
+    t8030->boot_info.post_trustcache_load = t8030_post_trustcache_load;
     t8030->boot_info.lock_regions       = t8030_lock_regions;
     if (t8030->pvgpu_fw != NULL && t8030->pvgpu_fw[0] != '\0') {
-        (void)inferno_pvgpu_fw_load(t8030->pvgpu_fw, &t8030->pvgpu_firmware);
+        if (inferno_pvgpu_fw_load(t8030->pvgpu_fw, &t8030->pvgpu_firmware)) {
+            t8030->boot_info.kc_extra_headroom = inferno_pvgpu_fw_kc_headroom(&t8030->pvgpu_firmware);
+        }
     }
     apple_iboot_init(&t8030->boot_info, machine);
 

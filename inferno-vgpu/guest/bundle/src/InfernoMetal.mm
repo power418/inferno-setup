@@ -503,25 +503,19 @@ struct GuestTransport {
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor*)desc iosurface:(IOSurfaceRef)iosurface plane:(NSUInteger)plane {
     uint64_t tid = self.client->alloc_handle();
-    IvgSurfaceImportPayload p{};
-    p.texture_id              = tid;
-    p.surface_id              = IOSurfaceGetID(iosurface);
-    p.plane                   = (uint32_t)plane;
-    p.desc.texture_type       = (uint32_t)desc.textureType;
-    p.desc.pixel_format       = (uint32_t)desc.pixelFormat;
-    p.desc.width              = (uint32_t)desc.width;
-    p.desc.height             = (uint32_t)desc.height;
-    p.desc.depth              = 1;
-    p.desc.mipmap_level_count = 1;
-    p.desc.sample_count       = 1;
-    p.desc.array_length       = 1;
-    p.desc.usage              = (uint32_t)desc.usage;
-    p.desc.storage_mode       = (uint32_t)desc.storageMode;
-    p.region_offset           = UINT64_MAX;
-    p.bytes_per_row           = IOSurfaceGetBytesPerRowOfPlane(iosurface, plane);
-    IvgCompletionRecord cmp{};
-    self.client->submit_control_pod(IVG_OP_SURFACE_IMPORT, &p, sizeof(p), cmp);
+    self.client->surface_import(
+        IOSurfaceGetID(iosurface),
+        tid,
+        (uint32_t)desc.width,
+        (uint32_t)desc.height,
+        (uint32_t)desc.pixelFormat,
+        IOSurfaceGetBytesPerRowOfPlane(iosurface, plane));
     return (id<MTLTexture>)[[InfernoMTLTexture alloc] initWithDevice:self handle:tid desc:desc];
+}
+
+- (BOOL)presentSurfaceTexture:(id<MTLTexture>)texture {
+    InfernoMTLTexture* t = (InfernoMTLTexture*)texture;
+    return self.client->display_present(t.handle, 0, 0) ? YES : NO;
 }
 
 - (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError**)error {

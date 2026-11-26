@@ -24,6 +24,10 @@ pub const IVG_FW_FLAG_ENABLE_METAL_FEATURESET: u32 = 1 << 0;
 pub const IVG_FW_FLAG_HAS_KEXT: u32 = 1 << 1;
 /// Header flag: package carries at least one `IVG_FW_ENTRY_BUNDLE`.
 pub const IVG_FW_FLAG_HAS_BUNDLE: u32 = 1 << 2;
+/// Header flag: package carries `IVG_FW_ENTRY_CDHASH` entries for Static TrustCache.
+pub const IVG_FW_FLAG_HAS_TRUSTCACHE: u32 = 1 << 3;
+/// Header flag: iBoot should inject kext Mach-O into kernelcache VM space.
+pub const IVG_FW_FLAG_INJECT_KEXT: u32 = 1 << 4;
 
 /// Entry kind: iOS kernel extension (`arm64e` Mach-O + optional `Info.plist` XML).
 pub const IVG_FW_ENTRY_KEXT: u32 = 1;
@@ -31,6 +35,12 @@ pub const IVG_FW_ENTRY_KEXT: u32 = 1;
 pub const IVG_FW_ENTRY_BUNDLE: u32 = 2;
 /// Entry kind: Device Tree overlay metadata.
 pub const IVG_FW_ENTRY_DT_OVERLAY: u32 = 3;
+/// Entry kind: Concatenated 20-byte SHA-256 CDHashes for Static TrustCache merging.
+pub const IVG_FW_ENTRY_CDHASH: u32 = 4;
+/// Entry kind: Array of [`IvgFwRelocEntry`] KPI/IOGPU bindings.
+pub const IVG_FW_ENTRY_RELOC_MAP: u32 = 5;
+/// Exact [`IvgFwRelocEntry`] size in bytes.
+pub const IVG_FW_RELOC_ENTRY_SIZE: usize = 128;
 
 /// Entry flag: payload is `arm64e`.
 pub const IVG_FW_ENTRY_FLAG_ARM64E: u32 = 1 << 0;
@@ -94,6 +104,22 @@ pub struct IvgFwEntry {
 const _: () = assert!(size_of::<IvgFwHeader>() == IVG_FW_HEADER_SIZE as usize);
 const _: () = assert!(size_of::<IvgFwEntry>() == IVG_FW_ENTRY_SIZE as usize);
 
+/// Fixed 128-byte KPI / IOGPU symbol binding record (`ivg_fw_reloc_entry_t`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromBytes, IntoBytes, Immutable, KnownLayout)]
+pub struct IvgFwRelocEntry {
+    /// Resolved virtual address in the target kernelcache.
+    pub target_va: u64,
+    /// Binding entry kind (`0` = resolved function/global VA, `1` = vtable VA).
+    pub kind: u32,
+    /// Binding flags (`1` = unique signature match in stripped release KC).
+    pub flags: u32,
+    /// Null-terminated Mach-O C/C++ symbol name.
+    pub symbol: [u8; 112],
+}
+
+const _: () = assert!(size_of::<IvgFwRelocEntry>() == IVG_FW_RELOC_ENTRY_SIZE);
+
 /// Error produced when encoding or verifying an `InfernoVgpu.fw` package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PackageError {
@@ -153,6 +179,17 @@ pub fn build_package(
     enable_metal_featureset: bool,
     specs: &[PackageEntrySpec],
 ) -> Result<Vec<u8>, PackageError> {
+    build_package_with_options(min_ios, featureset_class, enable_metal_featureset, false, specs)
+}
+
+/// Serializes an `InfernoVgpu.fw` binary package with explicit boot-time injection flags.
+pub fn build_package_with_options(
+    min_ios: (u16, u16),
+    featureset_class: &str,
+    enable_metal_featureset: bool,
+    inject_kext: bool,
+    specs: &[PackageEntrySpec],
+) -> Result<Vec<u8>, PackageError> {
     if specs.len() > IVG_FW_MAX_ENTRIES {
         return Err(PackageError::LimitExceeded("entry_count > 16"));
     }
@@ -166,12 +203,17 @@ pub fn build_package(
     } else {
         0
     };
+    if inject_kext {
+        flags |= IVG_FW_FLAG_INJECT_KEXT;
+    }
 
     for spec in specs {
         if spec.kind == IVG_FW_ENTRY_KEXT {
             flags |= IVG_FW_FLAG_HAS_KEXT;
         } else if spec.kind == IVG_FW_ENTRY_BUNDLE {
             flags |= IVG_FW_FLAG_HAS_BUNDLE;
+        } else if spec.kind == IVG_FW_ENTRY_CDHASH {
+            flags |= IVG_FW_FLAG_HAS_TRUSTCACHE;
         }
         let payload_offset = cursor as u64;
         let payload_size = spec.payload.len() as u64;

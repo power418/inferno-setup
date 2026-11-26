@@ -247,7 +247,48 @@ bool WireClient::get_device_caps(size_t caps_staging_off, IvgDeviceCaps& out_cap
     }
     if (caps_staging_off + sizeof(IvgDeviceCaps) > region_size_) return false;
     std::memcpy(&out_caps, region_base_ + caps_staging_off, sizeof(out_caps));
+    cached_caps_ = out_caps;
+    caps_loaded_ = true;
     return true;
+}
+
+bool WireClient::surface_import(uint32_t surface_id,
+                                uint64_t texture_id,
+                                uint32_t width,
+                                uint32_t height,
+                                uint32_t pixel_format,
+                                uint64_t bytes_per_row,
+                                uint64_t region_offset) {
+    IvgSurfaceImportPayload p{};
+    p.texture_id              = texture_id;
+    p.surface_id              = surface_id;
+    p.plane                   = 0;
+    p.desc.texture_type       = 2; /* MTLTextureType2D */
+    p.desc.pixel_format       = pixel_format;
+    p.desc.width              = width;
+    p.desc.height             = height;
+    p.desc.depth              = 1;
+    p.desc.mipmap_level_count = 1;
+    p.desc.sample_count       = 1;
+    p.desc.array_length       = 1;
+    p.desc.usage              = 0x05u; /* ShaderRead | RenderTarget */
+    p.desc.storage_mode       = has_unified_memory() ? 0u : 1u;
+    p.region_offset           = region_offset;
+    p.bytes_per_row           = bytes_per_row;
+    IvgCompletionRecord cmp{};
+    return submit_control_pod(IVG_OP_SURFACE_IMPORT, &p, sizeof(p), cmp) && cmp.status == 0;
+}
+
+bool WireClient::surface_release(uint64_t texture_id) {
+    IvgHandlePayload    p{texture_id};
+    IvgCompletionRecord cmp{};
+    return submit_control_pod(IVG_OP_SURFACE_RELEASE, &p, sizeof(p), cmp) && cmp.status == 0;
+}
+
+bool WireClient::display_present(uint64_t texture_id, uint32_t level, uint32_t slice) {
+    IvgDisplayPresentPayload p{texture_id, level, slice};
+    IvgCompletionRecord      cmp{};
+    return submit_control_pod(IVG_OP_DISPLAY_PRESENT, &p, sizeof(p), cmp) && cmp.status == 0;
 }
 
 bool WireClient::create_context(uint32_t pid) {

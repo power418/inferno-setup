@@ -94,6 +94,8 @@ class RFB:
                 if updated:
                     GLib.idle_add(on_update)
                     self.request(1)
+                else:
+                    self.request(0)
             elif t == 1:  # colour map
                 self.r(3)
                 self.r(struct.unpack(">H", self.r(2))[0] * 6)

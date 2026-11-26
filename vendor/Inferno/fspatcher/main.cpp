@@ -21,9 +21,14 @@
 #include "assembler.hpp"
 #include "patcher.hpp"
 #include <algorithm>
+#include <array>
 #include <filesystem>
+#include <fstream>
+#include <glib.h>
+#include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <CLI/CLI.hpp>
 
 namespace
@@ -636,14 +641,81 @@ namespace
         }
     };
 
+    auto compute_macho_cdhash(const std::filesystem::path& path) -> std::optional<std::string>
+    {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f) { return std::nullopt; }
+        const auto sz = static_cast<std::size_t>(f.tellg());
+        if (sz < 32) { return std::nullopt; }
+        f.seekg(0);
+        std::vector<std::uint8_t> buf(sz);
+        if (!f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(sz))) { return std::nullopt; }
+
+        auto rd32 = [&](std::size_t o) -> std::uint32_t {
+            return std::uint32_t(buf[o]) | (std::uint32_t(buf[o + 1]) << 8) | (std::uint32_t(buf[o + 2]) << 16)
+                   | (std::uint32_t(buf[o + 3]) << 24);
+        };
+        auto be32 = [&](std::size_t o) -> std::uint32_t {
+            return (std::uint32_t(buf[o]) << 24) | (std::uint32_t(buf[o + 1]) << 16)
+                   | (std::uint32_t(buf[o + 2]) << 8) | std::uint32_t(buf[o + 3]);
+        };
+
+        if (rd32(0) != 0xFEEDFACFu) { return std::nullopt; }
+        const std::uint32_t ncmds    = rd32(16);
+        const std::uint32_t sizeofcs = rd32(20);
+        std::size_t         cur      = 32;
+        if (cur + sizeofcs > buf.size()) { return std::nullopt; }
+
+        std::uint32_t sig_off = 0, sig_sz = 0;
+        for (std::uint32_t i = 0; i < ncmds; ++i) {
+            if (cur + 8 > buf.size()) { break; }
+            const auto cmd  = rd32(cur);
+            const auto size = rd32(cur + 4);
+            if (cmd == 0x1Du && size >= 16) {
+                sig_off = rd32(cur + 8);
+                sig_sz  = rd32(cur + 12);
+                break;
+            }
+            if (size < 8) { break; }
+            cur += size;
+        }
+        if (sig_sz < 20 || std::size_t(sig_off) + std::size_t(sig_sz) > buf.size()) { return std::nullopt; }
+        if (be32(sig_off) != 0xFADE0CC0u) { return std::nullopt; }
+        const std::uint32_t count = be32(sig_off + 8);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const std::size_t idx_off = std::size_t(sig_off) + 12 + std::size_t(i) * 8;
+            if (idx_off + 8 > std::size_t(sig_off) + sig_sz) { break; }
+            const std::size_t cd_off = std::size_t(sig_off) + be32(idx_off + 4);
+            if (cd_off + 8 > std::size_t(sig_off) + sig_sz) { continue; }
+            if (be32(cd_off) != 0xFADE0C02u) { continue; }
+            const std::uint32_t cd_len = be32(cd_off + 4);
+            if (cd_off + cd_len > std::size_t(sig_off) + sig_sz) { continue; }
+
+            auto*               sum = g_checksum_new(G_CHECKSUM_SHA256);
+            std::uint8_t        dig[32]{};
+            gsize               dlen = sizeof(dig);
+            g_checksum_update(sum, buf.data() + cd_off, gssize(cd_len));
+            g_checksum_get_digest(sum, dig, &dlen);
+            g_checksum_free(sum);
+
+            std::ostringstream oss;
+            for (std::size_t j = 0; j < 20; ++j) {
+                oss << std::hex << std::setw(2) << std::setfill('0') << unsigned(dig[j]);
+            }
+            return oss.str();
+        }
+        return std::nullopt;
+    }
+
     auto run(const int argc, char* argv[])
     {
         std::filesystem::path disk_path;
         bool                  revert_only   = false;
         bool                  dryRun        = false;
-        bool                  unredact_logs = false;
-        bool                  no_sw         = false;
-        bool                  pvgpu         = false;
+        bool                  unredact_logs        = false;
+        bool                  no_sw                = false;
+        bool                  pvgpu                = false;
+        bool                  pvgpu_install_bundle = false;
         std::filesystem::path pvgpu_bundle_path;
 
         CLI::App app{"Inferno Filesystem Patcher"};
@@ -661,6 +733,8 @@ namespace
         app.add_option("--pvgpu-bundle", pvgpu_bundle_path,
                        "Validate an arm64/arm64e InfernoMetal Mach-O bundle against AGXMetalA13 target")
             ->check(CLI::ExistingFile);
+        app.add_flag("--pvgpu-install-bundle", pvgpu_install_bundle,
+                     "Install validated --pvgpu-bundle into AGXMetalA13 target in-place (revertible via -r)");
 
         CLI11_PARSE(app, argc, argv);
 
@@ -741,16 +815,32 @@ namespace
                 throw std::runtime_error("`--pvgpu-bundle` must be a 64-bit ARM64/ARM64E Mach-O binary");
             }
             const auto bundle_size = std::filesystem::file_size(pvgpu_bundle_path);
+            const auto cdhash      = compute_macho_cdhash(pvgpu_bundle_path);
             std::cout << "Validated pvgpu Mach-O bundle `" << pvgpu_bundle_path.string() << "` (" << std::dec
                       << bundle_size << " bytes, subtype=0x" << std::hex << hdr[2] << ", filetype=" << std::dec
-                      << hdr[3] << std::hex << ").\n";
+                      << hdr[3] << ", cdhash=" << (cdhash ? *cdhash : "<unsigned>") << std::hex << ").\n";
             try {
-                auto target = storage.open("/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13");
+                const char* target_path = "/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13";
+                auto        target      = storage.open(target_path);
                 target.seekg(0, std::ios::end);
-                const auto target_size = target.tellg();
-                std::cout << "Target `/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13` found in System "
-                             "volume ("
-                          << std::dec << target_size << std::hex << " bytes).\n";
+                const auto target_size = static_cast<std::size_t>(target.tellg());
+                std::cout << "Target `" << target_path << "` found in System volume (" << std::dec << target_size
+                          << std::hex << " bytes).\n";
+                if (pvgpu_install_bundle) {
+                    if (bundle_size > target_size) {
+                        throw std::runtime_error("pvgpu bundle larger than AGXMetalA13 target; cannot overwrite safely");
+                    }
+                    std::vector<std::uint8_t> staged(target_size, 0);
+                    bf.seekg(0);
+                    bf.read(reinterpret_cast<char*>(staged.data()), static_cast<std::streamsize>(bundle_size));
+                    patcher.write(FileRef(storage, target_path), 0, staged.data(), staged.size());
+                    std::cout << "Queued revertible overwrite of `" << target_path << "` (" << std::dec << bundle_size
+                              << std::hex << " bytes written, padded to " << std::dec << target_size << std::hex
+                              << ").\n";
+                }
+            }
+            catch (const std::runtime_error&) {
+                throw;
             }
             catch (const std::exception&) {
                 std::cerr << "Warning: `/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13` not found in "

@@ -1,0 +1,11 @@
+#pragma once
+#include <stddef.h>
+namespace std {
+template <typename T, size_t N>
+struct array {
+    T elems_[N];
+    T& operator[](size_t i) { return elems_[i]; }
+    const T& operator[](size_t i) const { return elems_[i]; }
+    constexpr size_t size() const { return N; }
+};
+}

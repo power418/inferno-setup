@@ -22,7 +22,9 @@ TRACKED_GLOBS = [
     "guest/bundle/src/InfernoWireClient.cpp",
     "guest/bundle/src/InfernoMetal.h",
     "guest/bundle/src/InfernoMetal.mm",
+    "guest/bundle/src/InfernoMetalBundleEntry.cpp",
     "guest/driver/Info.plist",
+    "guest/driver/include/ios14_iokit_abi.hpp",
     "guest/driver/src/InfernoVgpuDriver.hpp",
     "guest/driver/src/InfernoVgpuDriver.cpp",
 ]

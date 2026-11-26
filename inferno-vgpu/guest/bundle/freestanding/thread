@@ -1,0 +1,5 @@
+#pragma once
+#include "ios_libc_shim.hpp"
+namespace std { namespace this_thread {
+inline void yield() { sched_yield(); }
+}}

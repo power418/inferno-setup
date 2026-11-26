@@ -1,0 +1,8 @@
+#pragma once
+#include "ios_libc_shim.hpp"
+namespace std {
+using ::memcpy;
+using ::memset;
+using ::strlen;
+using ::strcmp;
+}

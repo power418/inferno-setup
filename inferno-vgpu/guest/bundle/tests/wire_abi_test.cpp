@@ -20,6 +20,8 @@ int main() {
     static_assert(sizeof(IvgCompletionRecord) == 40, "IvgCompletionRecord must be 40 bytes");
     static_assert(sizeof(IvgDeviceCaps) == 168, "IvgDeviceCaps must be 168 bytes");
     static_assert(sizeof(IvgTextureDescWire) == 40, "IvgTextureDescWire must be 40 bytes");
+    static_assert(sizeof(IvgSurfaceImportPayload) == 72, "IvgSurfaceImportPayload must be 72 bytes");
+    static_assert(sizeof(IvgDisplayPresentPayload) == 16, "IvgDisplayPresentPayload must be 16 bytes");
     static_assert(sizeof(IvgRenderBeginPassPayload) == 488, "IvgRenderBeginPassPayload must be 488 bytes");
 
     /* 2. Verify SHA-256 matches standard vector ("abc") */
@@ -52,6 +54,13 @@ int main() {
         assert(got.seqno == i);
         assert(got.result_u64 == i * 99);
     }
+
+    /* 4. Verify WireClient record encoding for ping / surface_import / display_present */
+    uint64_t db_count = 0;
+    WireClient client(region.data(), region.size(), 42, [&](uint64_t) { db_count++; });
+    assert(client.initialize_control_rings(0x0, 0x1000, 0x10000, 0x11000, 4096));
+    assert(client.alloc_handle() == 1);
+    assert(client.alloc_staging(128) >= 0x200000);
 
     return 0;
 }

@@ -52,6 +52,19 @@ public:
     bool get_device_caps(size_t caps_staging_off, IvgDeviceCaps& out_caps);
     bool create_context(uint32_t pid);
 
+    bool surface_import(uint32_t surface_id,
+                        uint64_t texture_id,
+                        uint32_t width,
+                        uint32_t height,
+                        uint32_t pixel_format,
+                        uint64_t bytes_per_row,
+                        uint64_t region_offset = UINT64_MAX);
+    bool surface_release(uint64_t texture_id);
+    bool display_present(uint64_t texture_id, uint32_t level = 0, uint32_t slice = 0);
+
+    bool has_unified_memory() const { return caps_loaded_ && cached_caps_.has_unified_memory != 0; }
+    const IvgDeviceCaps& cached_caps() const { return cached_caps_; }
+
     uint64_t alloc_handle();
     size_t   alloc_staging(size_t bytes, size_t align = 64);
 
@@ -91,6 +104,8 @@ private:
     std::atomic<uint64_t> next_seqno_{1};
     std::atomic<uint64_t> next_handle_{1};
     std::atomic<size_t>   staging_cursor_{0x200000}; /* 2 MiB past control/queue ring area */
+    IvgDeviceCaps         cached_caps_{};
+    bool                  caps_loaded_{false};
 };
 
 } // namespace inferno::gpu

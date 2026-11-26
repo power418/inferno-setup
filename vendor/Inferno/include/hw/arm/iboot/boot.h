@@ -352,6 +352,8 @@ typedef struct
 /// Consumes `data`.
 MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* data, gsize len,
                                            MachoHeader64** secure_monitor);
+MachoHeader64* apple_boot_load_kernel_data_ex(const char* filename, uint8_t* data, gsize len,
+                                              MachoHeader64** secure_monitor, uint64_t extra_headroom);
 
 /// Loads the SPTM or TXM image with IM4P payload `type` or its restore counterpart `restore_type`.
 /// Consumes `data`.
@@ -359,6 +361,7 @@ MachoHeader64* apple_boot_load_monitor_data(const char* filename, uint8_t* data,
                                             const char* restore_type);
 
 MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len);
+MachoHeader64* apple_boot_parse_macho_ex(uint8_t* data, uint32_t len, uint64_t extra_headroom);
 
 vaddr apple_boot_get_entry_point(MachoHeader64* header);
 

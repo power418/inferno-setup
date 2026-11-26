@@ -25,11 +25,15 @@ extern "C" {
 #define IVG_FW_FLAG_ENABLE_METAL_FEATURESET (1u << 0)
 #define IVG_FW_FLAG_HAS_KEXT                (1u << 1)
 #define IVG_FW_FLAG_HAS_BUNDLE              (1u << 2)
+#define IVG_FW_FLAG_HAS_TRUSTCACHE          (1u << 3)
+#define IVG_FW_FLAG_INJECT_KEXT             (1u << 4)
 
 /* Entry kinds */
 #define IVG_FW_ENTRY_KEXT       1u
 #define IVG_FW_ENTRY_BUNDLE     2u
 #define IVG_FW_ENTRY_DT_OVERLAY 3u
+#define IVG_FW_ENTRY_CDHASH     4u /* Concatenated 20-byte SHA-256 CDHashes for Static TrustCache */
+#define IVG_FW_ENTRY_RELOC_MAP  5u /* Array of ivg_fw_reloc_entry_t KPI/IOGPU bindings */
 
 /* Entry flags */
 #define IVG_FW_ENTRY_FLAG_ARM64E   (1u << 0)
@@ -62,9 +66,19 @@ typedef struct ivg_fw_entry {
     char     target_path[120];
 } ivg_fw_entry_t;
 
+typedef struct ivg_fw_reloc_entry {
+    uint64_t target_va;
+    uint32_t kind;
+    uint32_t flags;
+    char     symbol[112];
+} ivg_fw_reloc_entry_t;
+
+#define IVG_FW_RELOC_ENTRY_SIZE 128u
+
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(ivg_fw_header_t) == IVG_FW_HEADER_SIZE, "ivg_fw_header_t must be 128 bytes");
 _Static_assert(sizeof(ivg_fw_entry_t) == IVG_FW_ENTRY_SIZE, "ivg_fw_entry_t must be 256 bytes");
+_Static_assert(sizeof(ivg_fw_reloc_entry_t) == IVG_FW_RELOC_ENTRY_SIZE, "ivg_fw_reloc_entry_t must be 96 bytes");
 #endif
 
 #ifdef __cplusplus

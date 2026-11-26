@@ -510,8 +510,8 @@ void apple_boot_get_kc_bounds(MachoHeader64* header, vaddr* text_base, vaddr* kc
     if (ro_upper != NULL) { *ro_upper = ro_upper_cur; }
 }
 
-MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* file_data, gsize file_len,
-                                           MachoHeader64** secure_monitor)
+MachoHeader64* apple_boot_load_kernel_data_ex(const char* filename, uint8_t* file_data, gsize file_len,
+                                              MachoHeader64** secure_monitor, uint64_t extra_headroom)
 {
     uint32_t       len;
     uint8_t*       data = NULL;
@@ -527,10 +527,16 @@ MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* file_d
         return NULL;
     }
 
-    header = apple_boot_parse_macho(data, len);
+    header = apple_boot_parse_macho_ex(data, len, extra_headroom);
     g_free(data);
     if (header == NULL) { error_setg(&error_fatal, "`%s` is not a valid Mach-O", filename); }
     return header;
+}
+
+MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* file_data, gsize file_len,
+                                           MachoHeader64** secure_monitor)
+{
+    return apple_boot_load_kernel_data_ex(filename, file_data, file_len, secure_monitor, 0);
 }
 
 MachoHeader64* apple_boot_load_monitor_data(const char* filename, uint8_t* file_data, gsize file_len, const char* type,
@@ -586,7 +592,7 @@ static bool apple_boot_get_fat_arm64_slice(uint8_t** data, uint32_t* len)
     return false;
 }
 
-MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len)
+MachoHeader64* apple_boot_parse_macho_ex(uint8_t* data, uint32_t len, uint64_t extra_headroom)
 {
     uint8_t*          phys_base;
     MachoHeader64*    header;
@@ -604,7 +610,7 @@ MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len)
     apple_boot_get_kc_bounds(header, &text_base, &kc_base, &kc_end, NULL, NULL);
     assert_cmphex(kc_base, <, kc_end);
 
-    phys_base = g_malloc0(kc_end - kc_base);
+    phys_base = g_malloc0((kc_end - kc_base) + extra_headroom);
 
     cmd = (MachoLoadCommand*)(header + 1);
     for (i = 0; i < header->n_cmds; i++, cmd = (MachoLoadCommand*)((char*)cmd + cmd->cmd_size)) {
@@ -617,6 +623,11 @@ MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len)
     }
 
     return (MachoHeader64*)(phys_base + text_base - kc_base);
+}
+
+MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len)
+{
+    return apple_boot_parse_macho_ex(data, len, 0);
 }
 
 uint32_t apple_boot_build_version(MachoHeader64* header)

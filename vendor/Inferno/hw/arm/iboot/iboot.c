@@ -178,6 +178,7 @@ static const char* KEEP_COMP[] = {
     "aes,s8000\0$",
     "aic,1\0$",
     "apcie-bridge\0$",
+    "apple,inferno-pvgpu\0$",
     "apple,lightning\0ARM,v8\0$",
     "apple,thunder\0ARM,v8\0$",
     "apple,twister\0ARM,v8\0$",
@@ -1846,7 +1847,7 @@ static void apple_iboot_load_images(AppleBootInfo* info, AppleIBootOS* os)
         error_setg(&error_fatal, "No kernel to boot");
         return;
     }
-    os->kernel = apple_boot_load_kernel_data(name, data, len, &os->secure_monitor);
+    os->kernel = apple_boot_load_kernel_data_ex(name, data, len, &os->secure_monitor, info->kc_extra_headroom);
 
     os->build_version = apple_boot_build_version(os->kernel);
     info_report("%s %u.%u.%u", apple_boot_platform_string(os->kernel), BUILD_VERSION_MAJOR(os->build_version),
@@ -1867,6 +1868,9 @@ static void apple_iboot_load_images(AppleBootInfo* info, AppleIBootOS* os)
                                &data, &len))
     {
         os->trustcache = apple_boot_load_trustcache_data(name, data, len, &os->trustcache_size);
+        if (os->trustcache != NULL && info->post_trustcache_load != NULL) {
+            info->post_trustcache_load(info->machine, &os->trustcache, &os->trustcache_size);
+        }
     }
 
     if (apple_boot_get_segment(os->kernel, "__DATA_SPTM") != NULL) {

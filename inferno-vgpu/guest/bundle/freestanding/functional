@@ -1,0 +1,38 @@
+#pragma once
+#include "ios_libc_shim.hpp"
+
+namespace std {
+template <typename Sig>
+class function;
+
+template <typename R, typename Arg>
+class function<R(Arg)> {
+    using InvokeFn = R (*)(void*, Arg);
+    void*    ctx_{nullptr};
+    InvokeFn fn_{nullptr};
+    void     (*dtor_)(void*){nullptr};
+
+public:
+    function() = default;
+    function(decltype(nullptr)) {}
+    template <typename F>
+    function(F f) {
+        auto* p = static_cast<F*>(malloc(sizeof(F)));
+        new (p) F(static_cast<F&&>(f));
+        ctx_  = p;
+        fn_   = [](void* c, Arg a) -> R { return (*static_cast<F*>(c))(a); };
+        dtor_ = [](void* c) { static_cast<F*>(c)->~F(); free(c); };
+    }
+    function(function&& o) noexcept : ctx_(o.ctx_), fn_(o.fn_), dtor_(o.dtor_) {
+        o.ctx_ = nullptr; o.fn_ = nullptr; o.dtor_ = nullptr;
+    }
+    function(const function&) = delete;
+    ~function() {
+        if (dtor_ && ctx_) dtor_(ctx_);
+    }
+    explicit operator bool() const { return fn_ != nullptr; }
+    R operator()(Arg a) const { return fn_(ctx_, a); }
+};
+}
+
+inline void* operator new(size_t, void* p) noexcept { return p; }

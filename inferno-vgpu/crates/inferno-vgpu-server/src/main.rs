@@ -8,6 +8,7 @@
 mod protocol;
 
 use inferno_vgpu::{DeviceConfig, GraphicsDevice, Platform, RtPlatform};
+use inferno_vgpu_graphics::wire::IvgDeviceCaps;
 use parking_lot::Mutex;
 use protocol::{IpcHeader, msg};
 use std::env;
@@ -159,6 +160,46 @@ fn serve_connection<P: Platform>(
                     log::error!("failed sending memfd via SCM_RIGHTS: {e}");
                     break;
                 }
+                println!(
+                    "inferno-vgpu-server: client connected (HELLO_ACK region={} MiB, gpu={})",
+                    device.region_size() / (1024 * 1024),
+                    device.platform().caps().device_name
+                );
+                let _ = io::stdout().flush();
+            }
+            msg::GET_CAPS => {
+                let c = device.platform().caps();
+                let mut wire_caps = IvgDeviceCaps {
+                    vendor_id: c.vendor_id,
+                    device_id: c.device_id,
+                    has_unified_memory: u32::from(c.has_unified_memory),
+                    max_threadgroup_memory_length: c.max_threadgroup_memory_length,
+                    max_buffer_length: c.max_buffer_length,
+                    read_write_texture_tier: c.read_write_texture_tier,
+                    argument_buffers_tier: c.argument_buffers_tier,
+                    apple_gpu_family: c.apple_gpu_family,
+                    supports_function_pointers: u32::from(c.supports_function_pointers),
+                    device_name: [0u8; 128],
+                };
+                let name_bytes = c.device_name.as_bytes();
+                let copy_len = name_bytes.len().min(wire_caps.device_name.len() - 1);
+                wire_caps.device_name[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
+                let payload = wire_caps.as_bytes();
+                let ack = IpcHeader {
+                    msg_type: msg::GET_CAPS_ACK,
+                    arg0: 0,
+                    arg1: 0,
+                    arg2: payload.len() as u64,
+                };
+                let guard = writer.lock();
+                if let Some(mut w) = guard.as_ref() {
+                    if w.write_all(ack.as_bytes()).is_err() {
+                        break;
+                    }
+                    if w.write_all(payload).is_err() {
+                        break;
+                    }
+                }
             }
             msg::MMIO_READ => {
                 let val = device.mmio_read(req.arg1);
@@ -289,13 +330,16 @@ fn run_server<P: Platform>(
     )?;
 
     println!(
-        "inferno-vgpu-server listening on {} (gpu={}, region={} MiB, display={}x{})",
+        "inferno-vgpu-server listening on {} (gpu={}, vendor=0x{:04x}, device=0x{:04x}, region={} MiB, display={}x{})",
         socket_path.display(),
         device.platform().caps().device_name,
+        device.platform().caps().vendor_id,
+        device.platform().caps().device_id,
         device.region_size() / (1024 * 1024),
         width,
         height
     );
+    let _ = io::stdout().flush();
 
     while !SHUTDOWN.load(Ordering::Acquire) {
         match listener.accept() {
@@ -414,7 +458,7 @@ mod tests {
             GraphicsDevice::new(
                 fake,
                 DeviceConfig {
-                    region_size: 2 * 1024 * 1024,
+                    region_size: 16 * 1024 * 1024,
                     display_width: 828,
                     display_height: 1792,
                     raise_irq: Arc::new(move |bits| {
@@ -434,9 +478,10 @@ mod tests {
         );
 
         let srv_dev = Arc::clone(&device);
+        let srv_dev_thread = Arc::clone(&srv_dev);
         let srv_thread = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            serve_connection(stream, &srv_dev, &writer_slot, 828, 1792);
+            serve_connection(stream, &srv_dev_thread, &writer_slot, 828, 1792);
         });
 
         let mut client = UnixStream::connect(&sock).unwrap();
@@ -448,6 +493,26 @@ mod tests {
         let (ack, fd_opt) = recv_fd_packet(&client);
         assert_eq!(ack.msg_type, msg::HELLO_ACK);
         let fd = fd_opt.expect("expected memfd via SCM_RIGHTS");
+
+        let caps_req = IpcHeader {
+            msg_type: msg::GET_CAPS,
+            ..Default::default()
+        };
+        client.write_all(caps_req.as_bytes()).unwrap();
+        let mut caps_ack_buf = [0u8; std::mem::size_of::<IpcHeader>()];
+        client.read_exact(&mut caps_ack_buf).unwrap();
+        let caps_ack = IpcHeader::read_from_bytes(&caps_ack_buf).unwrap();
+        assert_eq!(caps_ack.msg_type, msg::GET_CAPS_ACK);
+        assert_eq!(caps_ack.arg2 as usize, std::mem::size_of::<IvgDeviceCaps>());
+        let mut caps_bytes = [0u8; std::mem::size_of::<IvgDeviceCaps>()];
+        client.read_exact(&mut caps_bytes).unwrap();
+        let caps = IvgDeviceCaps::read_from_bytes(&caps_bytes).unwrap();
+        let name_end = caps
+            .device_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(caps.device_name.len());
+        assert!(!caps.device_name[..name_end].is_empty());
         let size = ack.arg1 as usize;
         let mapped = unsafe {
             libc::mmap(
@@ -504,6 +569,107 @@ mod tests {
         let cmp = got.expect("ping completion over shared memfd");
         assert_eq!(cmp.seqno, 777);
         assert_eq!(cmp.result_u64, 0xBEEF);
+
+        /* Verify SurfaceImport -> DisplayPresent -> READ_DISPLAY roundtrip */
+        let tex_desc = IvgTextureDescWire {
+            texture_type: 2,
+            pixel_format: 80, /* BGRA8Unorm */
+            width: 828,
+            height: 1792,
+            depth: 1,
+            mipmap_level_count: 1,
+            sample_count: 1,
+            array_length: 1,
+            usage: 5,
+            storage_mode: 0,
+        };
+        let surf_staging_off = 0x200000usize;
+        let frame_bytes = 828usize * 1792usize * 4usize;
+        unsafe {
+            let mut row = [0u8; 828 * 4];
+            for px in row.as_chunks_mut::<4>().0 {
+                *px = [0x11, 0x22, 0x33, 0xFF];
+            }
+            for y in 0..1792usize {
+                std::ptr::copy_nonoverlapping(
+                    row.as_ptr(),
+                    base.add(surf_staging_off + y * row.len()),
+                    row.len(),
+                );
+            }
+        }
+        let imp = IvgSurfaceImportPayload {
+            texture_id: 900,
+            surface_id: 42,
+            plane: 0,
+            desc: tex_desc,
+            region_offset: surf_staging_off as u64,
+            bytes_per_row: 828 * 4,
+        };
+        let imp_rec = encode_record(control_op::SURFACE_IMPORT, 1, 778, &imp);
+        ctrl_sub.push_bytes(&imp_rec).unwrap();
+        client.write_all(db.as_bytes()).unwrap();
+        let mut got_imp = None;
+        for _ in 0..200 {
+            if let Ok(true) = ctrl_cmp.try_pop_fixed(&mut buf) {
+                got_imp = Some(IvgCompletionRecord::read_from_bytes(&buf).unwrap());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(got_imp.expect("surface_import cmp").status, 0);
+
+        let pres = IvgDisplayPresentPayload {
+            texture_id: 900,
+            level: 0,
+            slice: 0,
+        };
+        let pres_rec = encode_record(control_op::DISPLAY_PRESENT, 1, 779, &pres);
+        ctrl_sub.push_bytes(&pres_rec).unwrap();
+        client.write_all(db.as_bytes()).unwrap();
+        let mut got_pres = None;
+        for _ in 0..200 {
+            if let Ok(true) = ctrl_cmp.try_pop_fixed(&mut buf) {
+                got_pres = Some(IvgCompletionRecord::read_from_bytes(&buf).unwrap());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(got_pres.expect("display_present cmp").status, 0);
+
+        let rd = IpcHeader {
+            msg_type: msg::READ_DISPLAY,
+            arg0: 0,
+            arg1: frame_bytes as u64,
+            arg2: 0,
+        };
+        client.write_all(rd.as_bytes()).unwrap();
+        let rd_ack = loop {
+            let mut rd_ack_buf = [0u8; std::mem::size_of::<IpcHeader>()];
+            client.read_exact(&mut rd_ack_buf).unwrap();
+            let pkt = IpcHeader::read_from_bytes(&rd_ack_buf).unwrap();
+            if pkt.msg_type == msg::IRQ_RAISE {
+                continue;
+            }
+            break pkt;
+        };
+        assert_eq!(rd_ack.msg_type, msg::READ_DISPLAY_ACK);
+        assert_eq!(rd_ack.arg2 as usize, frame_bytes);
+        let mut disp_px = vec![0u8; frame_bytes];
+        client.read_exact(&mut disp_px).unwrap();
+        assert_eq!(&disp_px[0..4], &[0x11, 0x22, 0x33, 0xFF]);
+
+        /* Verify device-lost transition + async IVG_IPC_IRQ_RAISE delivery */
+        srv_dev.mark_device_lost(0xDEAD_BEEF);
+        let irq_pkt = loop {
+            let mut irq_buf = [0u8; std::mem::size_of::<IpcHeader>()];
+            client.read_exact(&mut irq_buf).unwrap();
+            let pkt = IpcHeader::read_from_bytes(&irq_buf).unwrap();
+            if pkt.msg_type == msg::IRQ_RAISE && (pkt.arg0 & IVG_IRQ_ERROR) != 0 {
+                break pkt;
+            }
+        };
+        assert_ne!(irq_pkt.arg0 & IVG_IRQ_ERROR, 0);
 
         drop(client);
         srv_thread.join().unwrap();

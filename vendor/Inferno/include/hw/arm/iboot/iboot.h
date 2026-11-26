@@ -100,6 +100,8 @@ typedef struct
     AppleDisplayPipeV4State* disp;
     void                     (*update_device_tree)(MachineState* machine, AppleDTNode* root);
     void                     (*post_kernel_load)(MachineState* machine, MachoHeader64* kc);
+    void                     (*post_trustcache_load)(MachineState* machine, uint8_t** trustcache, uint64_t* trustcache_size);
+    uint64_t                 kc_extra_headroom;
     /// Lock the read-only region of the kernel, if `lock_ro`, and the TZ0.
     void (*lock_regions)(MachineState* machine, hwaddr ro_lower, hwaddr ro_upper, bool lock_ro, hwaddr tz0_base,
                          hwaddr tz0_size);

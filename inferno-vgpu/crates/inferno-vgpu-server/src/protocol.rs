@@ -27,6 +27,10 @@ pub mod msg {
     pub const READ_DISPLAY_ACK: u32 = 10;
     /// Server -> Client (async): raise interrupt bits (`arg0 = irq_bits`).
     pub const IRQ_RAISE: u32 = 11;
+    /// Client -> Server: request host GPU `IvgDeviceCaps` struct.
+    pub const GET_CAPS: u32 = 12;
+    /// Server -> Client: `arg2 = sizeof(IvgDeviceCaps)`, followed by `IvgDeviceCaps` bytes.
+    pub const GET_CAPS_ACK: u32 = 13;
 }
 
 /// Fixed 24-byte wire packet header over the Unix socket.

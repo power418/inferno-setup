@@ -3,13 +3,18 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use inferno_vgpu_firmware::abi::{extract_research_abi, match_release_symbols};
+use inferno_vgpu_firmware::codesign::{
+    adhoc_sign_macho, extract_cdhash, format_cdhash_hex, parse_cdhash_hex,
+};
 use inferno_vgpu_firmware::im4p::decode_kernelcache_bytes;
 use inferno_vgpu_firmware::inject::{check_kext_imports, plan_kext_injection};
 use inferno_vgpu_firmware::macho::{MH_EXECUTE, MH_FILESET, ParsedMacho};
 use inferno_vgpu_firmware::manifest::{
-    IVG_FW_ENTRY_BUNDLE, IVG_FW_ENTRY_DT_OVERLAY, IVG_FW_ENTRY_FLAG_ARM64E,
-    IVG_FW_ENTRY_FLAG_PRELINK, IVG_FW_ENTRY_FLAG_REQUIRED, IVG_FW_ENTRY_KEXT, PackageEntrySpec,
-    build_package, cstr_to_string, verify_package,
+    IVG_FW_ENTRY_BUNDLE, IVG_FW_ENTRY_CDHASH, IVG_FW_ENTRY_DT_OVERLAY, IVG_FW_ENTRY_FLAG_ARM64E,
+    IVG_FW_ENTRY_FLAG_PRELINK, IVG_FW_ENTRY_FLAG_REQUIRED, IVG_FW_ENTRY_KEXT,
+    IVG_FW_ENTRY_RELOC_MAP, PackageEntrySpec, build_package_with_options, cstr_to_string,
+    verify_package,
 };
 use std::env;
 use std::fs;
@@ -22,11 +27,17 @@ fn print_usage() {
          \n\
          Usage:\n\
          \x20 inferno-vgpu-fw inspect-kc <kernelcache> [--lzfse-dir <dir>]\n\
+         \x20 inferno-vgpu-fw extract-abi <research-kc> --out-dir <dir> [--lzfse-dir <dir>]\n\
+         \x20 inferno-vgpu-fw match-release <research-kc> <release-kc> --out-json <json> [--out-bin <bin>] [--lzfse-dir <dir>]\n\
          \x20 inferno-vgpu-fw check-imports <kernelcache> <kext-macho> [--lzfse-dir <dir>]\n\
          \x20 inferno-vgpu-fw plan-inject <kernelcache> <kext-macho> [--lzfse-dir <dir>]\n\
-         \x20 inferno-vgpu-fw stage --out <InfernoVgpu.fw> [--featureset <MTL2,2>] [--enable-metal]\n\
+         \x20 inferno-vgpu-fw cdhash <macho>\n\
+         \x20 inferno-vgpu-fw adhoc-sign <in-macho> --out <out-macho> [--id <bundle-id>]\n\
+         \x20 inferno-vgpu-fw stage --out <InfernoVgpu.fw> [--featureset <GLES2,0>] [--enable-metal] [--inject-kext]\n\
          \x20                       [--kext <id>:<macho>[:<plist>]]\n\
          \x20                       [--bundle <id>:<macho>:<ios-target-path>]\n\
+         \x20                       [--cdhash <id>:<hex40-or-macho>]\n\
+         \x20                       [--reloc-map <id>:<reloc-map.bin>]\n\
          \x20                       [--dt-overlay <id>:<plist>]\n\
          \x20 inferno-vgpu-fw verify <InfernoVgpu.fw>"
     );
@@ -145,6 +156,7 @@ fn cmd_stage(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "stage requires --out <InfernoVgpu.fw>".to_owned())?;
     let featureset = find_flag_value(args, "--featureset").unwrap_or_else(|| "GLES2,0".to_owned());
     let enable_metal = args.iter().any(|a| a == "--enable-metal");
+    let inject_kext = args.iter().any(|a| a == "--inject-kext");
 
     let mut specs = Vec::new();
     let mut i = 0;
@@ -193,6 +205,58 @@ fn cmd_stage(args: &[String]) -> Result<(), String> {
                 });
                 i += 2;
             }
+            "--cdhash" => {
+                let val = args
+                    .get(i + 1)
+                    .ok_or("--cdhash expects <id>:<hex40-or-macho>")?;
+                let (id, rest) = val
+                    .split_once(':')
+                    .ok_or("--cdhash format is <id>:<hex40-or-macho>")?;
+                let hash = if Path::new(rest).is_file() {
+                    let data = fs::read(rest).map_err(|e| format!("read {rest}: {e}"))?;
+                    if data.len() == 20 {
+                        let mut h = [0u8; 20];
+                        h.copy_from_slice(&data);
+                        h
+                    } else if data.len() >= 40
+                        && let Ok(s) = std::str::from_utf8(&data)
+                        && let Ok(h) = parse_cdhash_hex(s)
+                    {
+                        h
+                    } else {
+                        extract_cdhash(&data)?
+                    }
+                } else {
+                    parse_cdhash_hex(rest)?
+                };
+                specs.push(PackageEntrySpec {
+                    kind: IVG_FW_ENTRY_CDHASH,
+                    flags: IVG_FW_ENTRY_FLAG_REQUIRED,
+                    identifier: id.to_owned(),
+                    target_path: String::new(),
+                    payload: hash.to_vec(),
+                    xml: Vec::new(),
+                });
+                i += 2;
+            }
+            "--reloc-map" => {
+                let val = args
+                    .get(i + 1)
+                    .ok_or("--reloc-map expects <id>:<reloc-map.bin>")?;
+                let (id, path) = val
+                    .split_once(':')
+                    .ok_or("--reloc-map format is <id>:<reloc-map.bin>")?;
+                let payload = fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+                specs.push(PackageEntrySpec {
+                    kind: IVG_FW_ENTRY_RELOC_MAP,
+                    flags: 0,
+                    identifier: id.to_owned(),
+                    target_path: String::new(),
+                    payload,
+                    xml: Vec::new(),
+                });
+                i += 2;
+            }
             "--dt-overlay" => {
                 let val = args.get(i + 1).ok_or("--dt-overlay expects <id>:<file>")?;
                 let parts: Vec<&str> = val.split(':').collect();
@@ -214,7 +278,7 @@ fn cmd_stage(args: &[String]) -> Result<(), String> {
         }
     }
 
-    let pkg = build_package((14, 0), &featureset, enable_metal, &specs)
+    let pkg = build_package_with_options((14, 0), &featureset, enable_metal, inject_kext, &specs)
         .map_err(|e| format!("build package: {e}"))?;
     if let Some(parent) = Path::new(&out_path).parent()
         && !parent.as_os_str().is_empty()
@@ -227,6 +291,90 @@ fn cmd_stage(args: &[String]) -> Result<(), String> {
         pkg.len(),
         specs.len()
     );
+    Ok(())
+}
+
+fn cmd_extract_abi(args: &[String]) -> Result<(), String> {
+    let kc_path = args
+        .first()
+        .ok_or_else(|| "extract-abi requires <research-kc>".to_owned())?;
+    let out_dir = find_flag_value(args, "--out-dir")
+        .ok_or_else(|| "extract-abi requires --out-dir <dir>".to_owned())?;
+    let lzfse_dir = find_flag_value(args, "--lzfse-dir").map(PathBuf::from);
+    let kc_bytes = load_kc(Path::new(kc_path), lzfse_dir.as_deref())?;
+    let abi = extract_research_abi(&kc_bytes)?;
+    fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {out_dir}: {e}"))?;
+    let dir = Path::new(&out_dir);
+    fs::write(dir.join("iogpu_vtables.json"), abi.to_vtables_json())
+        .map_err(|e| format!("write iogpu_vtables.json: {e}"))?;
+    fs::write(dir.join("kpi_symbols.toml"), abi.to_kpi_toml())
+        .map_err(|e| format!("write kpi_symbols.toml: {e}"))?;
+    fs::write(dir.join("iogpu_abi.h"), abi.to_c_header())
+        .map_err(|e| format!("write iogpu_abi.h: {e}"))?;
+    println!(
+        "Extracted iOS 14.0 ABI: {} symbols, {} KPIs, {} vtables -> {out_dir}",
+        abi.total_symbols,
+        abi.kpi_symbols.len(),
+        abi.vtables.len()
+    );
+    Ok(())
+}
+
+fn cmd_match_release(args: &[String]) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("match-release requires <research-kc> <release-kc>".to_owned());
+    }
+    let out_json = find_flag_value(args, "--out-json")
+        .ok_or_else(|| "match-release requires --out-json <file>".to_owned())?;
+    let out_bin = find_flag_value(args, "--out-bin");
+    let lzfse_dir = find_flag_value(args, "--lzfse-dir").map(PathBuf::from);
+    let res_bytes = load_kc(Path::new(&args[0]), lzfse_dir.as_deref())?;
+    let rel_bytes = load_kc(Path::new(&args[1]), lzfse_dir.as_deref())?;
+    let map = match_release_symbols(&res_bytes, &rel_bytes)?;
+    if let Some(p) = Path::new(&out_json).parent()
+        && !p.as_os_str().is_empty()
+    {
+        fs::create_dir_all(p).map_err(|e| format!("mkdir {}: {e}", p.display()))?;
+    }
+    fs::write(&out_json, map.to_json()).map_err(|e| format!("write {out_json}: {e}"))?;
+    if let Some(bin_path) = out_bin {
+        let bin = map.to_binary()?;
+        fs::write(&bin_path, &bin).map_err(|e| format!("write {bin_path}: {e}"))?;
+    }
+    println!(
+        "Matched release KC KPIs: {}/{} unique -> {out_json}",
+        map.unique_count,
+        map.entries.len()
+    );
+    Ok(())
+}
+
+fn cmd_cdhash(args: &[String]) -> Result<(), String> {
+    let path = args
+        .first()
+        .ok_or_else(|| "cdhash requires <macho>".to_owned())?;
+    let data = fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+    let hash = extract_cdhash(&data)?;
+    println!("{}", format_cdhash_hex(&hash));
+    Ok(())
+}
+
+fn cmd_adhoc_sign(args: &[String]) -> Result<(), String> {
+    let in_path = args
+        .first()
+        .ok_or_else(|| "adhoc-sign requires <in-macho>".to_owned())?;
+    let out_path = find_flag_value(args, "--out")
+        .ok_or_else(|| "adhoc-sign requires --out <out-macho>".to_owned())?;
+    let id = find_flag_value(args, "--id").unwrap_or_else(|| "dev.inferno.metal".to_owned());
+    let data = fs::read(in_path).map_err(|e| format!("read {in_path}: {e}"))?;
+    let (signed, cdhash) = adhoc_sign_macho(&data, &id)?;
+    if let Some(p) = Path::new(&out_path).parent()
+        && !p.as_os_str().is_empty()
+    {
+        fs::create_dir_all(p).map_err(|e| format!("mkdir {}: {e}", p.display()))?;
+    }
+    fs::write(&out_path, &signed).map_err(|e| format!("write {out_path}: {e}"))?;
+    println!("{}", format_cdhash_hex(&cdhash));
     Ok(())
 }
 
@@ -247,8 +395,16 @@ fn cmd_verify(args: &[String]) -> Result<(), String> {
         verified.header.flags
     );
     for (idx, e) in verified.entries.iter().enumerate() {
+        let kind_name = match e.kind {
+            IVG_FW_ENTRY_KEXT => "KEXT",
+            IVG_FW_ENTRY_BUNDLE => "BUNDLE",
+            IVG_FW_ENTRY_DT_OVERLAY => "DT_OVERLAY",
+            IVG_FW_ENTRY_CDHASH => "CDHASH",
+            IVG_FW_ENTRY_RELOC_MAP => "RELOC_MAP",
+            _ => "UNKNOWN",
+        };
         println!(
-            "  [{idx}] kind={} id={} payload={}B xml={}B target={}",
+            "  [{idx}] kind={kind_name}({}) id={} payload={}B xml={}B target={}",
             e.kind,
             cstr_to_string(&e.identifier),
             e.payload_size,
@@ -267,8 +423,12 @@ fn main() -> ExitCode {
     };
     let res = match cmd.as_str() {
         "inspect-kc" => cmd_inspect_kc(rest),
+        "extract-abi" => cmd_extract_abi(rest),
+        "match-release" => cmd_match_release(rest),
         "check-imports" => cmd_check_imports(rest),
         "plan-inject" => cmd_plan_inject(rest),
+        "cdhash" => cmd_cdhash(rest),
+        "adhoc-sign" => cmd_adhoc_sign(rest),
         "stage" => cmd_stage(rest),
         "verify" => cmd_verify(rest),
         "-h" | "--help" => {

@@ -15,7 +15,10 @@ SSS_DIR="$SCRIPT_DIR/SimulatedSigningServer"
 LOCAL_PREFIX="${LOCAL_PREFIX:-$SCRIPT_DIR/.local}"
 
 export PATH="$LOCAL_PREFIX/bin:$HOME/.local/bin:$PATH"
+export CPATH="$LOCAL_PREFIX/include${CPATH:+:$CPATH}"
+export LIBRARY_PATH="$LOCAL_PREFIX/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export LD_LIBRARY_PATH="$LOCAL_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PKG_CONFIG_PATH="$LOCAL_PREFIX/lib/pkgconfig:$LOCAL_PREFIX/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 ROOT_PREFIX=()
 if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
@@ -64,11 +67,15 @@ main_vm() {
     local machine_opts="${BOARD:-t8030},sep-rom=$ROOT_DIR/${SEP_ROM_NAME:-AppleSEPROM-Cebu-B1},kaslr-off=${KASLR_OFF:-true}"
     if [ "${GPU:-off}" = "pv" ]; then
         local sock="${GPU_SERVER_SOCKET:-/run/user/$UID/inferno-gpu.sock}"
+        local fw="${GPU_FW:-}"
+        if [ -z "$fw" ] && [ -f "$VGPU_DIR/firmware/build/InfernoVgpu.fw" ]; then
+            fw="$VGPU_DIR/firmware/build/InfernoVgpu.fw"
+        fi
         if [ -S "$sock" ]; then
             machine_opts="${machine_opts},pvgpu-socket=${sock}"
-            if [ -n "${GPU_FW:-}" ] && [ -f "$GPU_FW" ]; then
-                machine_opts="${machine_opts},pvgpu-fw=${GPU_FW}"
-                info "GPU=pv active via $sock (fw=$GPU_FW)"
+            if [ -n "$fw" ] && [ -f "$fw" ]; then
+                machine_opts="${machine_opts},pvgpu-fw=${fw}"
+                info "GPU=pv active via $sock (fw=$fw)"
             else
                 info "GPU=pv active via $sock"
             fi
@@ -411,9 +418,10 @@ start_gpu_bg() {
     fi
     info "Starting inferno-vgpu-server in background..."
     ensure_log_dir
+    rm -f "$sock"
     setsid "$SCRIPT_DIR/run.sh" gpu >"${GPU_LOG:-$LOG_DIR/gpu.log}" 2>&1 < /dev/null &
     local i
-    for i in $(seq 1 30); do
+    for i in $(seq 1 60); do
         [ -S "$sock" ] && { ok "GPU server listening on $sock"; return 0; }
         sleep 0.2
     done
@@ -424,6 +432,7 @@ stop_gpu() {
     local pids
     pids="$(pgrep -f '[i]nferno-vgpu-server' 2>/dev/null | paste -sd' ' - || true)"
     terminate_pids "$pids" "GPU server"
+    rm -f "${GPU_SERVER_SOCKET:-/run/user/$UID/inferno-gpu.sock}"
 }
 
 start_vm_bg() {

@@ -11,13 +11,15 @@
     <key>CFBundlePackageType</key>
     <string>KEXT</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>1.0.0</string>
     <key>IOKitPersonalities</key>
     <dict>
         <key>InfernoVgpu</key>
         <dict>
             <key>CFBundleIdentifier</key>
             <string>dev.chefkiss.driver.InfernoVgpu</string>
+            <key>IOMatchCategory</key>
+            <string>IOAcceleratorES</string>
             <key>IOClass</key>
             <string>InfernoVgpuService</string>
             <key>IOProviderClass</key>
@@ -29,7 +31,28 @@
             </array>
             <key>IOUserClientClass</key>
             <string>InfernoVgpuUserClient</string>
+            <key>MetalPluginName</key>
+            <string>InfernoMetal</string>
+            <key>MetalPluginClassName</key>
+            <string>InfernoMTLDevice</string>
+            <key>IOGLESBundleName</key>
+            <string>AppleMetalGLRenderer</string>
         </dict>
+    </dict>
+    <key>OSBundleLibraries</key>
+    <dict>
+        <key>com.apple.kpi.bsd</key>
+        <string>8.0</string>
+        <key>com.apple.kpi.iokit</key>
+        <string>8.0</string>
+        <key>com.apple.kpi.libkern</key>
+        <string>8.0</string>
+        <key>com.apple.kpi.mach</key>
+        <string>8.0</string>
+        <key>com.apple.iokit.IOGPUFamily</key>
+        <string>2.0.0</string>
+        <key>com.apple.iokit.IOSurface</key>
+        <string>52.6.0</string>
     </dict>
 </dict>
 </plist>

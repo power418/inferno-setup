@@ -1,7 +1,7 @@
 //! 64-bit Mach-O parser for iOS `MH_EXECUTE` (prelinked kernelcache),
 //! `MH_FILESET` (iOS 15+ kernel collection), `MH_KEXT_BUNDLE`, and `MH_BUNDLE` / `MH_DYLIB`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 /// Little-endian 64-bit Mach-O magic (`0xFEEDFACF`).
@@ -28,6 +28,8 @@ pub const MH_FILESET: u32 = 12;
 pub const LC_SYMTAB: u32 = 0x02;
 /// 64-bit segment load command.
 pub const LC_SEGMENT_64: u32 = 0x19;
+/// Embedded code signature linkedit data (`LC_CODE_SIGNATURE`).
+pub const LC_CODE_SIGNATURE: u32 = 0x1D;
 /// Build version command (`LC_BUILD_VERSION`).
 pub const LC_BUILD_VERSION: u32 = 0x32;
 /// Fileset entry command (`LC_FILESET_ENTRY`).
@@ -168,6 +170,8 @@ pub struct ParsedMacho {
     pub fileset_entries: Vec<FilesetEntry>,
     /// Symbol table command `(symoff, nsyms, stroff, strsize)` if present.
     pub symtab: Option<(u32, u32, u32, u32)>,
+    /// Embedded code signature `(dataoff, datasize)` if present.
+    pub code_signature: Option<(u32, u32)>,
 }
 
 impl ParsedMacho {
@@ -201,6 +205,7 @@ impl ParsedMacho {
         let mut build_version = None;
         let mut fileset_entries = Vec::new();
         let mut symtab = None;
+        let mut code_signature = None;
 
         let mut cursor = base + 32;
         for _ in 0..header.ncmds {
@@ -266,6 +271,11 @@ impl ParsedMacho {
                         read_u32(data, cursor + 20)?,
                     ));
                 }
+                LC_CODE_SIGNATURE => {
+                    if cmdsize >= 16 {
+                        code_signature = Some((read_u32(data, cursor + 8)?, read_u32(data, cursor + 12)?));
+                    }
+                }
                 LC_BUILD_VERSION => {
                     if cmdsize >= 24 {
                         build_version = Some(BuildVersion {
@@ -304,6 +314,7 @@ impl ParsedMacho {
             build_version,
             fileset_entries,
             symtab,
+            code_signature,
         })
     }
 
@@ -318,6 +329,105 @@ impl ParsedMacho {
             .iter()
             .find(|s| s.name == seg)
             .and_then(|s| s.sections.iter().find(|sec| sec.sect_name == sect))
+    }
+
+    /// Returns the `__TEXT` base virtual address (or first non-zero fileoff-0 segment).
+    pub fn text_base(&self) -> Option<u64> {
+        self.segments
+            .iter()
+            .find(|s| s.name == "__TEXT" && s.vmsize > 0)
+            .or_else(|| {
+                self.segments
+                    .iter()
+                    .find(|s| s.fileoff == 0 && s.filesize > 0 && s.name != "__PAGEZERO")
+            })
+            .map(|s| s.vmaddr)
+    }
+
+    /// Maps a virtual address `va` inside mapped file bytes to a file offset.
+    pub fn va_to_file_offset(&self, va: u64) -> Option<usize> {
+        for seg in &self.segments {
+            if seg.filesize == 0 {
+                continue;
+            }
+            if let Some(end) = seg.vmaddr.checked_add(seg.filesize)
+                && va >= seg.vmaddr
+                && va < end
+            {
+                let delta = va - seg.vmaddr;
+                return usize::try_from(seg.fileoff.checked_add(delta)?).ok();
+            }
+        }
+        None
+    }
+
+    /// Collects `(symbol_name -> virtual_address)` for defined non-STAB external symbols.
+    pub fn collect_defined_symbol_map(&self, data: &[u8]) -> Result<BTreeMap<String, u64>, MachoError> {
+        let mut out = BTreeMap::new();
+        self.collect_sym_map_into(data, false, &mut out)?;
+        if self.header.file_type == MH_FILESET {
+            for entry in &self.fileset_entries {
+                let off = usize::try_from(entry.fileoff)
+                    .map_err(|_| MachoError::BadLoadCommand("fileset fileoff overflow"))?;
+                if let Ok(sub) = Self::parse_at(data, off) {
+                    sub.collect_sym_map_into(data, false, &mut out)?;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Collects `(symbol_name -> virtual_address)` including internal (`!N_EXT`) section symbols.
+    pub fn collect_all_defined_symbol_map(
+        &self,
+        data: &[u8],
+    ) -> Result<BTreeMap<String, u64>, MachoError> {
+        let mut out = BTreeMap::new();
+        self.collect_sym_map_into(data, true, &mut out)?;
+        Ok(out)
+    }
+
+    fn collect_sym_map_into(
+        &self,
+        data: &[u8],
+        include_internal: bool,
+        out: &mut BTreeMap<String, u64>,
+    ) -> Result<(), MachoError> {
+        let Some((symoff, nsyms, stroff, strsize)) = self.symtab else {
+            return Ok(());
+        };
+        let sym_base = symoff as usize;
+        let str_base = stroff as usize;
+        let str_end = str_base
+            .checked_add(strsize as usize)
+            .ok_or(MachoError::Truncated("strtab overflow"))?;
+        if str_end > data.len() {
+            return Err(MachoError::Truncated("strtab"));
+        }
+        let strtab = &data[str_base..str_end];
+        let sym_bytes = (nsyms as usize)
+            .checked_mul(16)
+            .ok_or(MachoError::Truncated("symtab overflow"))?;
+        if sym_base.checked_add(sym_bytes).is_none_or(|e| e > data.len()) {
+            return Err(MachoError::Truncated("symtab"));
+        }
+        for i in 0..nsyms as usize {
+            let off = sym_base + i * 16;
+            let n_strx = read_u32(data, off)? as usize;
+            let n_type = data[off + 4];
+            let n_value = read_u64(data, off + 8)?;
+            if (n_type & N_STAB) != 0 || (!include_internal && (n_type & N_EXT) == 0) {
+                continue;
+            }
+            if (n_type & N_TYPE) != N_SECT || n_value == 0 || n_strx >= strtab.len() {
+                continue;
+            }
+            let name = read_fixed_cstr(&strtab[n_strx..]);
+            if !name.is_empty() {
+                out.entry(name).or_insert(n_value);
+            }
+        }
+        Ok(())
     }
 
     /// Returns `(lowest_vmaddr, highest_vmaddr_end)` across all non-empty segments.
