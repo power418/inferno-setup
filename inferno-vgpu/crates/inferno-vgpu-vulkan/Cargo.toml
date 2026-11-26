@@ -1,0 +1,21 @@
+[package]
+name = "inferno-vgpu-vulkan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+testkit = []
+
+[dependencies]
+metal2vulkan.workspace = true
+metal2vulkan-runtime.workspace = true
+ash.workspace = true
+libc.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/inferno-vgpu-graphics",
+    "crates/inferno-vgpu-vulkan",
+    "crates/inferno-vgpu-window",
+    "crates/inferno-vgpu",
+    "crates/inferno-vgpu-c",
+    "crates/inferno-vgpu-server",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-2.0-or-later OR LGPL-3.0-or-later"
+
+[workspace.dependencies]
+inferno-vgpu-graphics = { path = "crates/inferno-vgpu-graphics" }
+inferno-vgpu-vulkan = { path = "crates/inferno-vgpu-vulkan", default-features = false }
+inferno-vgpu-window = { path = "crates/inferno-vgpu-window", default-features = false }
+inferno-vgpu = { path = "crates/inferno-vgpu", default-features = false }
+
+metal2vulkan = { path = "../vendor/metal2vulkan/crates/metal2vulkan" }
+metal2vulkan-runtime = { path = "../vendor/metal2vulkan/crates/metal2vulkan-runtime" }
+
+ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
+parking_lot = "0.12"
+zerocopy = { version = "0.8", features = ["derive"] }
+log = { version = "0.4", features = ["kv"] }
+libc = "0.2"
+sha2 = "0.10"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+
+[profile.release]
+panic = "unwind"
+overflow-checks = false
+debug = "line-tables-only"
+lto = "thin"
+
+[profile.dev]
+panic = "unwind"
+overflow-checks = true
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

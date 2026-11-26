@@ -1,0 +1,26 @@
+[package]
+name = "inferno-vgpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+testkit = ["inferno-vgpu-vulkan/testkit"]
+
+[dependencies]
+inferno-vgpu-graphics.workspace = true
+inferno-vgpu-vulkan.workspace = true
+inferno-vgpu-window.workspace = true
+libc.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+sha2.workspace = true
+zerocopy.workspace = true
+
+[dev-dependencies]
+inferno-vgpu-vulkan = { path = "../inferno-vgpu-vulkan", features = ["testkit"] }
+
+[lints]
+workspace = true

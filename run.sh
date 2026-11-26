@@ -5,7 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.env"
 
 ROOT_DIR="$SCRIPT_DIR/InfernoData"
-INFERNO_DIR="$SCRIPT_DIR/Inferno"
+if [ -f "$SCRIPT_DIR/vendor/Inferno/xmake.lua" ]; then
+    INFERNO_DIR="$SCRIPT_DIR/vendor/Inferno"
+else
+    INFERNO_DIR="$SCRIPT_DIR/Inferno"
+fi
+VGPU_DIR="$SCRIPT_DIR/inferno-vgpu"
 SSS_DIR="$SCRIPT_DIR/SimulatedSigningServer"
 LOCAL_PREFIX="${LOCAL_PREFIX:-$SCRIPT_DIR/.local}"
 
@@ -56,9 +61,20 @@ main_vm() {
     local display_args=()
     [ -n "${DISPLAY_ARGS:-}" ] && display_args=(-display "$DISPLAY_ARGS")
 
+    local machine_opts="${BOARD:-t8030},sep-rom=$ROOT_DIR/${SEP_ROM_NAME:-AppleSEPROM-Cebu-B1},kaslr-off=${KASLR_OFF:-true}"
+    if [ "${GPU:-off}" = "pv" ]; then
+        local sock="${GPU_SERVER_SOCKET:-/run/user/$UID/inferno-gpu.sock}"
+        if [ -S "$sock" ]; then
+            machine_opts="${machine_opts},pvgpu-socket=${sock}"
+            info "GPU=pv active via $sock"
+        else
+            warn "GPU=pv set, but $sock is not listening; falling back to framebuffer (GPU=off)"
+        fi
+    fi
+
     cd "$INFERNO_DIR"
     exec xmake r inferno-aarch64 \
-        -M "${BOARD:-t8030},sep-rom=$ROOT_DIR/${SEP_ROM_NAME:-AppleSEPROM-Cebu-B1},kaslr-off=${KASLR_OFF:-true}" \
+        -M "$machine_opts" \
         -append "${KERNEL_ARGS:-tlto_us=-1 mtxspin=-1 serial=3 wdt=-1}" \
         -smp "${MAIN_SMP:-7}" -m "${MAIN_RAM:-4G}" \
         "${display_args[@]}" \
@@ -235,7 +251,20 @@ fs_patch() {
     require_built
     info "Applying filesystem patches to root image..."
     cd "$INFERNO_DIR"
-    exec xmake r inferno-fs-patcher -d "$ROOT_DIR/root"
+    local extra=()
+    [ "${GPU:-off}" = "pv" ] && extra+=(--pvgpu)
+    exec xmake r inferno-fs-patcher "${extra[@]}" -d "$ROOT_DIR/root"
+}
+
+gpu_server() {
+    local bin="$VGPU_DIR/target/dist-vulkan/bin/inferno-vgpu-server"
+    [ -x "$bin" ] || die "inferno-vgpu-server missing. Run ./setup.sh gpu first."
+    local sock="${GPU_SERVER_SOCKET:-/run/user/$UID/inferno-gpu.sock}"
+    info "Starting inferno-vgpu-server on $sock ..."
+    if [ -n "${GPU_DEVICE:-}" ]; then
+        export INFERNO_VGPU_DEVICE="$GPU_DEVICE"
+    fi
+    exec "$bin" --socket "$sock" --region-mb "${GPU_REGION_MB:-64}"
 }
 
 view_screen() {
@@ -363,6 +392,35 @@ start_sss_bg() {
     wait_port "$SSS_PORT" || die "Signing server failed to start (see $LOG_DIR/sss.log)"
 }
 
+start_gpu_bg() {
+    [ "${GPU:-off}" = "pv" ] || return 0
+    local sock="${GPU_SERVER_SOCKET:-/run/user/$UID/inferno-gpu.sock}"
+    local bin="$VGPU_DIR/target/dist-vulkan/bin/inferno-vgpu-server"
+    if [ -S "$sock" ] && pgrep -f '[i]nferno-vgpu-server' >/dev/null 2>&1; then
+        ok "GPU server already running ($sock)"
+        return 0
+    fi
+    if [ ! -x "$bin" ]; then
+        warn "inferno-vgpu-server not built; falling back to framebuffer (run ./setup.sh gpu)"
+        return 0
+    fi
+    info "Starting inferno-vgpu-server in background..."
+    ensure_log_dir
+    setsid "$SCRIPT_DIR/run.sh" gpu >"${GPU_LOG:-$LOG_DIR/gpu.log}" 2>&1 < /dev/null &
+    local i
+    for i in $(seq 1 30); do
+        [ -S "$sock" ] && { ok "GPU server listening on $sock"; return 0; }
+        sleep 0.2
+    done
+    warn "GPU server did not open $sock in time; emulator will fall back to framebuffer"
+}
+
+stop_gpu() {
+    local pids
+    pids="$(pgrep -f '[i]nferno-vgpu-server' 2>/dev/null | paste -sd' ' - || true)"
+    terminate_pids "$pids" "GPU server"
+}
+
 start_vm_bg() {
     local attempt
     for attempt in 1 2 3; do
@@ -428,6 +486,7 @@ stop_all() {
     local rc=0
     stop_vhclient || rc=1
     stop_vm || rc=1
+    stop_gpu || rc=1
     stop_signing || rc=1
 
     # Sockets can linger briefly after the process is gone.
@@ -456,6 +515,7 @@ run_all() {
     info "Starting everything in one shot..."
     ensure_usb_support
     start_sss_bg
+    start_gpu_bg
 
     # Never kill a healthy emulator here: an abrupt kill leaves the SEP in an
     # inconsistent state and the next boot panics, taking USB down with it.
@@ -483,11 +543,12 @@ run_all() {
 }
 
 usage() {
-    echo "Usage: $0 [all|stop|sss|main|usb|view|restore|restore-now|fs-patch]"
+    echo "Usage: $0 [all|stop|sss|gpu|main|usb|view|restore|restore-now|fs-patch]"
     echo ""
     echo "  all         Start signing server + emulator + USB; restore only if needed"
-    echo "  stop        Gracefully stop emulator, signing server and VirtualHere (USB)"
+    echo "  stop        Gracefully stop emulator, GPU server, signing server and VirtualHere (USB)"
     echo "  sss         Start SimulatedSigningServer (terminal 1)"
+    echo "  gpu         Start inferno-vgpu-server (when GPU=pv)"
     echo "  main        Boot the emulated iPhone (terminal 2)"
     echo "  usb         Attach the emulated iPhone via VirtualHere client"
     echo "  view        Open the iOS screen with VNC viewer (127.0.0.1:5900)"
@@ -503,6 +564,7 @@ case "${1:-help}" in
     all|auto)           run_all ;;
     stop|kill)          stop_all ;;
     sss|signing-server) signing_server ;;
+    gpu)                gpu_server ;;
     main)               main_vm ;;
     usb)                attach_usb ;;
     view)               view_screen ;;

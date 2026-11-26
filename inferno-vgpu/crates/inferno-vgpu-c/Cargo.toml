@@ -1,0 +1,30 @@
+[package]
+name = "inferno-vgpu-c"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+default = ["vulkan"]
+vulkan = []
+testkit = ["inferno-vgpu/testkit", "inferno-vgpu-vulkan/testkit"]
+
+[dependencies]
+inferno-vgpu.workspace = true
+inferno-vgpu-vulkan.workspace = true
+libc.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+inferno-vgpu = { path = "../inferno-vgpu", features = ["testkit"] }
+inferno-vgpu-graphics.workspace = true
+inferno-vgpu-vulkan = { path = "../inferno-vgpu-vulkan", features = ["testkit"] }
+zerocopy.workspace = true
+
+[lints]
+workspace = true

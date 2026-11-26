@@ -1,0 +1,13 @@
+language = "C"
+pragma_once = true
+include_guard = "INFERNO_VGPU_H"
+cpp_compat = true
+tab_width = 4
+
+[export]
+include = [
+    "IvgStatus",
+    "IvgGraphicsCallbacks",
+    "IvgGraphicsDeviceConfig",
+    "IvgGraphicsDevice",
+]

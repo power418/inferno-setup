@@ -5,7 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.env"
 
 ROOT_DIR="$SCRIPT_DIR/InfernoData"
-INFERNO_DIR="$SCRIPT_DIR/Inferno"
+if [ -f "$SCRIPT_DIR/vendor/Inferno/xmake.lua" ]; then
+    INFERNO_DIR="$SCRIPT_DIR/vendor/Inferno"
+else
+    INFERNO_DIR="$SCRIPT_DIR/Inferno"
+fi
+VGPU_DIR="$SCRIPT_DIR/inferno-vgpu"
 SSS_DIR="$SCRIPT_DIR/SimulatedSigningServer"
 WORK_DIR="$SCRIPT_DIR/.build-deps"
 LOCAL_PREFIX="${LOCAL_PREFIX:-$SCRIPT_DIR/.local}"
@@ -364,17 +369,36 @@ check_status() {
     [ -s "$ROOT_DIR/${IPSW_FILENAME:-}" ] || { warn "IPSW not downloaded yet"; }
     [ -n "${SEP_IV_KEY:-}" ] || { warn "SEP_IV_KEY not set"; }
     command -v idevicerestore >/dev/null 2>&1 && ok "idevicerestore: $(command -v idevicerestore)" || warn "idevicerestore not installed"
+    command -v cargo >/dev/null 2>&1 && ok "cargo: $(command -v cargo)" || warn "cargo missing (needed for inferno-vgpu)"
+    [ -x "$VGPU_DIR/target/dist-vulkan/bin/inferno-vgpu-server" ] \
+        && ok "inferno-vgpu-server: $VGPU_DIR/target/dist-vulkan/bin/inferno-vgpu-server" \
+        || warn "inferno-vgpu not built yet (run ./setup.sh gpu)"
+    [ -e /dev/udmabuf ] && ok "/dev/udmabuf present" || warn "/dev/udmabuf missing"
     return $rc
 }
 
+build_gpu() {
+    [ -d "$VGPU_DIR" ] || die "inferno-vgpu directory missing: $VGPU_DIR"
+    command -v cargo >/dev/null 2>&1 || die "Rust/cargo is required to build inferno-vgpu"
+    info "Building inferno-vgpu (metal2vulkan + server + C library)..."
+    (
+        cd "$VGPU_DIR"
+        cargo xtask dist
+        make -C guest/bundle host-test
+    )
+    ok "inferno-vgpu built ($VGPU_DIR/target/dist-vulkan)"
+    build_inferno
+}
+
 usage() {
-    echo "Usage: $0 [deps|bootstrap|viewer|usb|build|disks|ipsw|firmware|sss|restore-tools|check|all]"
+    echo "Usage: $0 [deps|bootstrap|viewer|usb|build|gpu|disks|ipsw|firmware|sss|restore-tools|check|all]"
     echo ""
     echo "  deps          Install system packages via sudo (Arch/Debian)"
     echo "  bootstrap     Install local xmake fallback + build lzfse (no sudo)"
     echo "  viewer        Install a local VNC viewer so you can open the iOS screen"
     echo "  usb           Install VirtualHere client + load usbip/vhci modules (sudo)"
     echo "  build         Configure and build Inferno with xmake"
+    echo "  gpu           Build inferno-vgpu (Rust/metal2vulkan) + rebuild Inferno"
     echo "  disks         Create the 9 raw disk images in InfernoData/"
     echo "  ipsw          Download the 5.5 GB IPSW (use SKIP_IPSW=1 with all to skip)"
     echo "  firmware      Verify/download SEP ROM and check IV+Key"
@@ -394,6 +418,7 @@ main() {
         viewer)         ensure_vnc_viewer ;;
         usb)            setup_usb ;;
         build)          bootstrap; build_inferno ;;
+        gpu)            bootstrap; build_gpu ;;
         disks)          bootstrap; create_disks ;;
         ipsw)           fetch_ipsw ;;
         firmware)       prepare_firmware ;;

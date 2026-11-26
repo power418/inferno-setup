@@ -40,7 +40,8 @@ class RFB:
         self.r(struct.unpack(">I", self.r(4))[0])
         # 32bpp little-endian BGRX == cairo FORMAT_RGB24 on little-endian hosts
         self.send(struct.pack(">BxxxBBBBHHHBBBxxx", 0, 32, 24, 0, 1, 255, 255, 255, 16, 8, 0))
-        self.send(struct.pack(">BxHi", 2, 1, 0))  # raw encoding only
+        self.send(struct.pack(">BxHii", 2, 2, 0, -258))  # raw + QEMU Extended Key Event
+        self.ext_keys = False
         self.stride = cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_RGB24, self.w)
         self.fb = bytearray(self.stride * self.h)
 
@@ -65,22 +66,34 @@ class RFB:
         y = max(0, min(self.h - 1, int(y)))
         self.send(struct.pack(">BBHH", 5, mask, x, y))
 
+    def key(self, down, keysym, xt_code=0):
+        if self.ext_keys and xt_code:
+            self.send(struct.pack(">BBHII", 255, 0, 1 if down else 0, int(keysym) & 0xffffffff, xt_code))
+        else:
+            self.send(struct.pack(">BBxxI", 4, 1 if down else 0, int(keysym) & 0xffffffff))
+
     def loop(self, on_update):
         self.request(0)
         while True:
             t = self.r(1)[0]
             if t == 0:
                 self.r(1)
+                updated = False
                 for _ in range(struct.unpack(">H", self.r(2))[0]):
                     x, y, rw, rh, enc = struct.unpack(">HHHHi", self.r(12))
+                    if enc == -258:  # QEMU Extended Key Event ack
+                        self.ext_keys = True
+                        continue
                     if enc != 0:
                         raise SystemExit("unexpected encoding %d" % enc)
                     data = self.r(rw * rh * 4)
                     for j in range(rh):
                         o = (y + j) * self.stride + x * 4
                         self.fb[o:o + rw * 4] = data[j * rw * 4:(j + 1) * rw * 4]
-                GLib.idle_add(on_update)
-                self.request(1)
+                    updated = True
+                if updated:
+                    GLib.idle_add(on_update)
+                    self.request(1)
             elif t == 1:  # colour map
                 self.r(3)
                 self.r(struct.unpack(">H", self.r(2))[0] * 6)
@@ -118,6 +131,9 @@ class Viewer(Gtk.Window):
         self.area.connect("button-release-event", self.btn)
         self.area.connect("motion-notify-event", self.motion)
         self.add(self.area)
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.KEY_RELEASE_MASK)
+        self.connect("key-press-event", self.on_key)
+        self.connect("key-release-event", self.on_key)
         self.connect("destroy", Gtk.main_quit)
 
     def _no_maximize(self, _w):
@@ -182,6 +198,18 @@ class Viewer(Gtk.Window):
 
     def motion(self, _w, ev):
         self.rfb.pointer(self.buttons, *self.to_fb(ev))
+
+    def on_key(self, _w, ev):
+        # Map X11 keysyms for Inferno Apple Buttons (F1-F10) and standard evdev codes to XT keycodes
+        fn_xt = {
+            0xffbe: 0x3b, 0xffbf: 0x3c, 0xffc0: 0x3d, 0xffc1: 0x3e, 0xffc2: 0x3f,
+            0xffc3: 0x40, 0xffc4: 0x41, 0xffc5: 0x42, 0xffc6: 0x43, 0xffc7: 0x44,
+        }
+        xt = fn_xt.get(ev.keyval, 0)
+        if not xt and 9 <= ev.hardware_keycode <= 96:
+            xt = ev.hardware_keycode - 8
+        self.rfb.key(ev.type == Gdk.EventType.KEY_PRESS, ev.keyval, xt)
+        return True
 
     def update(self):
         self.area.queue_draw()

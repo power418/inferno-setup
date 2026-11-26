@@ -1,0 +1,48 @@
+language = "C"
+pragma_once = true
+include_guard = "INFERNO_GRAPHICS_WIRE_H"
+cpp_compat = true
+tab_width = 4
+
+[export]
+include = [
+    "IvgRingHeader",
+    "IvgRecordHeader",
+    "IvgCompletionRecord",
+    "IvgDeviceCaps",
+    "IvgPingPayload",
+    "IvgContextCreatePayload",
+    "IvgQueueCreatePayload",
+    "IvgBlockAllocPayload",
+    "IvgBufferCreatePayload",
+    "IvgTextureDescWire",
+    "IvgTextureCreatePayload",
+    "IvgTextureTransferPayload",
+    "IvgLibraryCreatePayload",
+    "IvgComputePipelineCreatePayload",
+    "IvgRenderColorAttachmentWire",
+    "IvgRenderPipelineCreatePayload",
+    "IvgSurfaceImportPayload",
+    "IvgDisplaySetModePayload",
+    "IvgDisplayPresentPayload",
+    "IvgCmdBufferBeginPayload",
+    "IvgCmdBufferCommitPayload",
+    "IvgComputeSetPipelinePayload",
+    "IvgComputeSetBufferPayload",
+    "IvgComputeSetTexturePayload",
+    "IvgComputeSetBytesPayload",
+    "IvgComputeDispatchPayload",
+    "IvgRenderPassColorAttachmentWire",
+    "IvgRenderBeginPassPayload",
+    "IvgRenderSetPipelinePayload",
+    "IvgRenderSetViewportPayload",
+    "IvgRenderSetScissorPayload",
+    "IvgRenderSetBufferPayload",
+    "IvgRenderSetTexturePayload",
+    "IvgRenderDrawPrimitivesPayload",
+    "IvgRenderDrawIndexedPayload",
+    "IvgBlitCopyBufferPayload",
+    "IvgBlitCopyTexturePayload",
+    "IvgBlitFillBufferPayload",
+    "IvgSyncEventPayload",
+]

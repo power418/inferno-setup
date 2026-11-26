@@ -6,3 +6,6 @@
 # Inferno is a git submodule, see .gitmodules
 /SimulatedSigningServer/
 *.log
+__pycache__/
+inferno-vgpu/target/
+inferno-vgpu/guest/bundle/build/

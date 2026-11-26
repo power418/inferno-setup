@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.chefkiss.driver.InfernoVgpu</string>
+    <key>CFBundleName</key>
+    <string>InfernoVgpu</string>
+    <key>CFBundleExecutable</key>
+    <string>InfernoVgpu</string>
+    <key>CFBundlePackageType</key>
+    <string>KEXT</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>IOKitPersonalities</key>
+    <dict>
+        <key>InfernoVgpu</key>
+        <dict>
+            <key>CFBundleIdentifier</key>
+            <string>dev.chefkiss.driver.InfernoVgpu</string>
+            <key>IOClass</key>
+            <string>InfernoVgpuService</string>
+            <key>IOProviderClass</key>
+            <string>AppleARMIODevice</string>
+            <key>IONameMatch</key>
+            <array>
+                <string>inferno-vgpu</string>
+                <string>apple,inferno-pvgpu</string>
+            </array>
+            <key>IOUserClientClass</key>
+            <string>InfernoVgpuUserClient</string>
+        </dict>
+    </dict>
+</dict>
+</plist>
