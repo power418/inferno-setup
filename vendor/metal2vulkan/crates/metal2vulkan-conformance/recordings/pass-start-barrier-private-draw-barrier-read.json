@@ -1,0 +1,506 @@
+{
+  "format": 1,
+  "case": "pass-start-barrier-private-draw-barrier-read",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "psb_reads.ll",
+      "entry": "psb_rect+psb_solid+psb_read+psb_sample+psb_masked+psb_under",
+      "source_sha256": "6233968f3935bb2b18bc3addaa89eef1ece4c1e4482306dcbc80a1b330bb1f2b"
+    },
+    {
+      "fixture": "psb_reads.air.ll",
+      "entry": "psb_rect+psb_solid+psb_read+psb_sample+psb_masked+psb_under",
+      "source_sha256": "acdac26065af4bc16e6066e9e9c15ab715e49682d40b9d9100470f5e914f1d9a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:psb_reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6233968f3935bb2b18bc3addaa89eef1ece4c1e4482306dcbc80a1b330bb1f2b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:psb_reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "acdac26065af4bc16e6066e9e9c15ab715e49682d40b9d9100470f5e914f1d9a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_solid",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c8bbe454bb86a39eea796148d4427b9729d6d29549f11abe6ae42781cbccb60b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_read",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ebb52f7e5891201601b69e03ba26e07f387c7c5f741165c6d3481450100c4d09"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8b38235d457aba2a119fe75572ad82f2830fd3bc8659edb487f1d0052524933e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "41323b5567706c6652395aba80c57e4778553f7bcce950d5c63c56195a2227ca"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "58e6e89d247a362de53e3f5d5df0238bb30950214bda27e018ff69360fff163d"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_solid",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "0-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "2-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels-0",
+                  "observed": {
+                    "value": {
+                      "list": [
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 0
+                            },
+                            "rows": {
+                              "uint": 4
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "WuYe/w=="
+                                    },
+                                    "texels": {
+                                      "uint": 32
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 4
+                            },
+                            "rows": {
+                              "uint": 12
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "WuYe/w=="
+                                    },
+                                    "texels": {
+                                      "uint": 4
+                                    }
+                                  }
+                                },
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 4
+                                    },
+                                    "texel": {
+                                      "bytes": "mcwz/w=="
+                                    },
+                                    "texels": {
+                                      "uint": 12
+                                    }
+                                  }
+                                },
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 16
+                                    },
+                                    "texel": {
+                                      "bytes": "ZjOZ/w=="
+                                    },
+                                    "texels": {
+                                      "uint": 8
+                                    }
+                                  }
+                                },
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 24
+                                    },
+                                    "texel": {
+                                      "bytes": "WuYe/w=="
+                                    },
+                                    "texels": {
+                                      "uint": 8
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 16
+                            },
+                            "rows": {
+                              "uint": 16
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "WuYe/w=="
+                                    },
+                                    "texels": {
+                                      "uint": 32
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Memory Barrier With Scope Validation\nscope (0x4) cannot contain MTLBarrierScopeRenderTargets on this device\nafterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this device\nFragment Function(psb_read): uses Texture binding at index 0 for t[0] which is also a color attachment at index 0. This may be a conflict as the color attachment's storeAction == MTLStoreActionStore and writeMask != MTLColorWriteMaskNone."
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 182.91 and ours at 178.06; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 358,
+      "times": {
+        "case": "pass-start-barrier-private-draw-barrier-read",
+        "calls": 10,
+        "in_calls": 70888374,
+        "on_cpu": 2342915,
+        "blocked": 68474249,
+        "elsewhere": 10702208,
+        "spend": 81977999,
+        "spend_least": 70565748,
+        "spend_most": 87320124,
+        "per_call": [
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 58572791,
+            "on_cpu": 1207292,
+            "blocked": 57210041,
+            "wall_least": 47159083,
+            "wall_most": 64259041,
+            "wall_total": 58572791,
+            "on_cpu_total": 1207292,
+            "blocked_total": 57210041
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 14000,
+            "on_cpu": 14500,
+            "blocked": 0,
+            "wall_least": 8500,
+            "wall_most": 17041,
+            "wall_total": 14000,
+            "on_cpu_total": 14500,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 11410583,
+            "on_cpu": 468084,
+            "blocked": 10875708,
+            "wall_least": 10806750,
+            "wall_most": 12057708,
+            "wall_total": 11410583,
+            "on_cpu_total": 468084,
+            "blocked_total": 10875708
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 5,
+            "most_calls": 5,
+            "wall": 68500,
+            "on_cpu": 68750,
+            "blocked": 0,
+            "wall_least": 67416,
+            "wall_most": 186250,
+            "wall_total": 500834,
+            "on_cpu_total": 502292,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 55333,
+            "on_cpu": 55541,
+            "blocked": 0,
+            "wall_least": 52333,
+            "wall_most": 100833,
+            "wall_total": 55333,
+            "on_cpu_total": 55541,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 10833,
+            "on_cpu": 11000,
+            "blocked": 0,
+            "wall_least": 10208,
+            "wall_most": 19583,
+            "wall_total": 10833,
+            "on_cpu_total": 11000,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

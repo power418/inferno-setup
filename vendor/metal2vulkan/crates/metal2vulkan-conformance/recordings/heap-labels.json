@@ -1,0 +1,892 @@
+{
+  "format": 1,
+  "case": "heap-labels",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "heaps",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "09424250bf9cfbdb6aa5467e0c730b16df36b1d26d9dcca417afe7e8c6709c21"
+                        }
+                      }
+                    },
+                    {
+                      "name": "asks",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "904a96f57cdb0eb504ab036a663661268c8ebccbbe8d6283494d70c30f7c5b9f"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "automatic-1048576-shared-default-cache-hazard-default",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-asked-for",
+                      "observed": {
+                        "value": {
+                          "uint": 1048576
+                        }
+                      }
+                    },
+                    {
+                      "name": "fresh",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": "absent"
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "labelled/0-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": {
+                              "lines": [
+                                ""
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "labelled/1-7",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": {
+                              "lines": [
+                                "a label"
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "labelled/2-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": {
+                              "lines": [
+                                ""
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "placement-1048576-shared-default-cache-hazard-default",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "size-asked-for",
+                      "observed": {
+                        "value": {
+                          "uint": 1048576
+                        }
+                      }
+                    },
+                    {
+                      "name": "fresh",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": "absent"
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "labelled/0-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": {
+                              "lines": [
+                                ""
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "labelled/1-7",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": {
+                              "lines": [
+                                "a label"
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "labelled/2-0",
+                      "observed": {
+                        "value": "absent"
+                      },
+                      "children": [
+                        {
+                          "name": "type",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "used_size",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "current_allocated_size",
+                          "observed": {
+                            "value": {
+                              "uint": 1048576
+                            }
+                          }
+                        },
+                        {
+                          "name": "storage_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "cpu_cache_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 0
+                            }
+                          }
+                        },
+                        {
+                          "name": "hazard_tracking_mode",
+                          "observed": {
+                            "value": {
+                              "uint": 1
+                            }
+                          }
+                        },
+                        {
+                          "name": "resource_options",
+                          "observed": {
+                            "value": {
+                              "uint": 256
+                            }
+                          }
+                        },
+                        {
+                          "name": "label",
+                          "observed": {
+                            "value": {
+                              "lines": [
+                                ""
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "name": "own_device",
+                          "observed": {
+                            "value": {
+                              "bool": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "heap-labels",
+        "calls": 16,
+        "in_calls": 25208,
+        "on_cpu": 27167,
+        "blocked": 0,
+        "elsewhere": 1166,
+        "spend": 28792,
+        "spend_least": 24123,
+        "spend_most": 36790,
+        "per_call": [
+          {
+            "call": "heap",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 3625,
+            "on_cpu": 3750,
+            "blocked": 0,
+            "wall_least": 3375,
+            "wall_most": 5375,
+            "wall_total": 8209,
+            "on_cpu_total": 8500,
+            "blocked_total": 0
+          },
+          {
+            "call": "heap_own_facts",
+            "least_calls": 8,
+            "most_calls": 8,
+            "wall": 209,
+            "on_cpu": 334,
+            "blocked": 0,
+            "wall_least": 208,
+            "wall_most": 250,
+            "wall_total": 2916,
+            "on_cpu_total": 3876,
+            "blocked_total": 0
+          },
+          {
+            "call": "set_heap_label",
+            "least_calls": 6,
+            "most_calls": 6,
+            "wall": 875,
+            "on_cpu": 1000,
+            "blocked": 0,
+            "wall_least": 833,
+            "wall_most": 958,
+            "wall_total": 13500,
+            "on_cpu_total": 14293,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

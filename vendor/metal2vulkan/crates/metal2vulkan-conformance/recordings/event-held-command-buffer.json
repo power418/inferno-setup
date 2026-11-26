@@ -1,0 +1,214 @@
+{
+  "format": 1,
+  "case": "event-held-command-buffer",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 5,
+      "outcomes": [
+        {
+          "runs": 5,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "scratch-bytes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2e22fd435060cd5d3cf5e3ef39f79e198b35bd2c4af31974db36601b3a2f4c91"
+                        }
+                      }
+                    },
+                    {
+                      "name": "wait-bounds-millis",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "15974581de1a64a38d73ffa2754e6c85bcf978e607026240ebb64d1cbac16ca1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "handler-names",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9a43ced3dbb398a5cb9df2bc92ad3c78b96a100c603b2cc4dfb706981cdde886"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "order",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "other-queue/status-once-it-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "held/status-while-its-event-is-unsignalled",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Committed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind/status-while-its-event-is-unsignalled",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Committed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "held/handlers-while-its-event-is-unsignalled",
+                      "observed": {
+                        "value": {
+                          "nothing": "ran_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "held/handlers-once-the-host-signalled",
+                      "observed": {
+                        "value": {
+                          "lines": [
+                            "scheduled",
+                            "completed"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "name": "held/status-at-the-end",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind/status-at-the-end",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "event-held-command-buffer",
+        "calls": 1,
+        "in_calls": 165788500,
+        "on_cpu": 1171083,
+        "blocked": 164600624,
+        "elsewhere": 3726625,
+        "spend": 169561250,
+        "spend_least": 162990792,
+        "spend_most": 172399083,
+        "per_call": [
+          {
+            "call": "held_command_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 165788500,
+            "on_cpu": 1171083,
+            "blocked": 164600624,
+            "wall_least": 162454500,
+            "wall_most": 167923916,
+            "wall_total": 165788500,
+            "on_cpu_total": 1171083,
+            "blocked_total": 164600624
+          }
+        ]
+      }
+    }
+  ]
+}

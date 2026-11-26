@@ -1,0 +1,488 @@
+{
+  "format": 1,
+  "case": "half-read-nans-rg32f",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "format_scout.ll",
+      "entry": "scout_read_f",
+      "source_sha256": "3d6a9f693cb8eaa851e08e12bcce2afce2890bf3973e9b47312f5e18f2157cb9"
+    },
+    {
+      "fixture": "format_scout.air.ll",
+      "entry": "scout_read_f",
+      "source_sha256": "3631bf570501999cd192eacf86330e5c45cc74b914cdda669586ada3838dc110"
+    },
+    {
+      "fixture": "format_scout.ll",
+      "entry": "scout_sample_f",
+      "source_sha256": "3d6a9f693cb8eaa851e08e12bcce2afce2890bf3973e9b47312f5e18f2157cb9"
+    },
+    {
+      "fixture": "format_scout.air.ll",
+      "entry": "scout_sample_f",
+      "source_sha256": "3631bf570501999cd192eacf86330e5c45cc74b914cdda669586ada3838dc110"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3d6a9f693cb8eaa851e08e12bcce2afce2890bf3973e9b47312f5e18f2157cb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3631bf570501999cd192eacf86330e5c45cc74b914cdda669586ada3838dc110"
+                        }
+                      }
+                    },
+                    {
+                      "name": "format",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4a11c2997424cd7a381eca1948dd4c442cb4b2a8086b676ecf67eff032eaacec"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:texels",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "83c5d1db53ea3f0ad27f165a51f8545d7916de453d78ff110c8bf365ed330d1b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:blank",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8166470a6833d390ca63c4171241090ea15de8a28fd47551b01af9602d136934"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "640e494dd31edb66b0748239aa90547d77e8ab37843b5bc8352a5f39e5296f06"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/nearest-sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-sample/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-sample/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-sample/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "nearest-sample/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "words",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "read",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4096
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 256,
+                            "image_pitch": 4096,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "nearest-sample",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPwAgwH+rqqo+AAAAAAAAgD8AAKB/AADQfwAAAAAAAIA/AACA/wAA8P8AAAAAAACAPwAAAIAAAMB/AAAAAAAAgD///39/AQCAfwAAAAAAAIA/q6qqPv//v38AAAAAAACAPwAA0H8BAMD/AAAAAAAAgD8AAPD/AQCA/wAAAAAAAIA/AADAf////38AAAAAAACAPwEAgH9FI8F/AAAAAAAAgD///79//////wAAAAAAAIA/AQDA/wAAgH8AAAAAAACAPwEAgP8BAAAAAAAAAAAAgD////9/AQAAgAAAAAAAAIA/RSPBfwAAgD8AAAAAAACAP/////8AAOB/AAAAAAAAgD8AAIB/AADA/wAAAAAAAIA/AQAAAAAggH8AAAAAAACAPwEAAIAAAAAAAAAAAAAAgD8AAIA/ACDAfwAAAAAAAIA/AADgfwAAoH8AAAAAAACAPwAAwP8AAID/AAAAAAAAgD8AIIB/AAAAgAAAAAAAAIA/AAAAAP//f38AAAAAAACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 4096
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 256,
+                            "image_pitch": 4096,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "half-read-nans-rg32f",
+        "calls": 13,
+        "in_calls": 28605335,
+        "on_cpu": 951418,
+        "blocked": 27594999,
+        "elsewhere": 3138583,
+        "spend": 31766543,
+        "spend_least": 31164707,
+        "spend_most": 45132001,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 3875,
+            "on_cpu": 4000,
+            "blocked": 0,
+            "wall_least": 3291,
+            "wall_most": 5834,
+            "wall_total": 9375,
+            "on_cpu_total": 9625,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 50500,
+            "on_cpu": 50791,
+            "blocked": 0,
+            "wall_least": 36500,
+            "wall_most": 63917,
+            "wall_total": 113000,
+            "on_cpu_total": 113499,
+            "blocked_total": 0
+          },
+          {
+            "call": "dispatch_threads",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 8792,
+            "on_cpu": 8959,
+            "blocked": 0,
+            "wall_least": 8125,
+            "wall_most": 17459,
+            "wall_total": 117875,
+            "on_cpu_total": 118208,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 24041083,
+            "on_cpu": 660500,
+            "blocked": 23349999,
+            "wall_least": 23553958,
+            "wall_most": 37918459,
+            "wall_total": 24041083,
+            "on_cpu_total": 660500,
+            "blocked_total": 23349999
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 459,
+            "on_cpu": 625,
+            "blocked": 0,
+            "wall_least": 333,
+            "wall_most": 791,
+            "wall_total": 2041,
+            "on_cpu_total": 2709,
+            "blocked_total": 0
+          },
+          {
+            "call": "sampler",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4250,
+            "on_cpu": 4375,
+            "blocked": 0,
+            "wall_least": 3750,
+            "wall_most": 4625,
+            "wall_total": 4250,
+            "on_cpu_total": 4375,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_2d_in_role",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 34709,
+            "on_cpu": 34917,
+            "blocked": 0,
+            "wall_least": 31042,
+            "wall_most": 39334,
+            "wall_total": 34709,
+            "on_cpu_total": 34917,
+            "blocked_total": 0
+          },
+          {
+            "call": "wait",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 498875,
+            "on_cpu": 3458,
+            "blocked": 495417,
+            "wall_least": 170250,
+            "wall_most": 655958,
+            "wall_total": 4111542,
+            "on_cpu_total": 17167,
+            "blocked_total": 4102042
+          }
+        ]
+      }
+    }
+  ]
+}

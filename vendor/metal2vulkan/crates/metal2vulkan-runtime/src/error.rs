@@ -1,0 +1,3114 @@
+//! The error every fallible call returns: one typed variant per case, never text to parse.
+
+use crate::arrays::IndexClass;
+use crate::export::ExportHandle;
+use crate::floor::BelowFloor;
+use crate::import::ImportHandle;
+use crate::memory::{BlockId, MemoryClass};
+use ash::vk;
+use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, TextureType};
+use metal2vulkan::pipeline::StageSource;
+use std::{fmt, io};
+
+mod basis;
+
+/// What a failing call returns.
+///
+/// Metal's counterpart is the `NSError` a creation call fills in, or the nil it returns. Here each
+/// case is a variant of its own, so a caller decides by matching, never by reading a message.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum Error {
+    /// [`Instance::new`](crate::Instance::new) found no Vulkan loader under the platform's
+    /// standard names, or [`Instance::with_drivers`](crate::Instance::with_drivers) none at the
+    /// consumer's path. Metal has no counterpart: Metal is part of the system.
+    Loader(ash::LoadingError),
+    /// [`Instance::with_drivers`](crate::Instance::with_drivers): the consumer gave its own
+    /// drivers, and the Vulkan loader does not offer `VK_LUNARG_direct_driver_loading`, by which
+    /// it would load them. Metal has no counterpart: Metal is part of the system.
+    NoDirectDriverLoading,
+    /// [`Device::new`](crate::Device::new): the device is below the runtime's floor, with every
+    /// item it lacks. Metal has no counterpart: every Metal device runs every program its family
+    /// supports.
+    BelowFloor(BelowFloor),
+    /// A Vulkan call failed: `call` names the Vulkan command and `result` is its error (out of
+    /// host or device memory, a lost device, an extension the loader does not offer, ...).
+    Vulkan {
+        /// The Vulkan command, such as `vkCreateDevice`.
+        call: &'static str,
+        /// What it returned.
+        result: vk::Result,
+    },
+    /// A call Metal refuses: its validation stops it, or it answers nil.
+    Refused(Refusal),
+    /// One of the device's or the runtime's fixed limits.
+    Limit(Limit),
+    /// A block the consumer holds no handle of: never taken, or its last handle gone. Metal has
+    /// no counterpart: blocks are the consumer's memory, not Metal objects.
+    NoSuchBlock(BlockId),
+    /// The runtime could not start one of its threads. Metal has no counterpart.
+    Thread(io::Error),
+    /// [`Surface::buffer`](crate::Surface::buffer) of a dma-buf surface: the host gave no
+    /// duplicate of the runtime's own fd of the surface's dma-buf, which the buffer's import
+    /// takes, as where the process holds as many open fds as it may. Metal has no counterpart.
+    Fd(io::Error),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state) and
+    /// [`Device::new_render_pipeline_state`](crate::Device::new_render_pipeline_state): the
+    /// translator made no pipeline of the descriptor's functions: a typed refusal of what it does
+    /// not translate, a descriptor Metal refuses, or a translation past its 20-second budget.
+    /// Metal's counterpart is `newComputePipelineStateWithFunction:error:` or
+    /// `newRenderPipelineStateWithDescriptor:error:` failing, which Metal does only for a
+    /// descriptor it refuses, with an `NSError` whose text says why.
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state): the translator made no
+    /// device sampler of the descriptor. [`Device::new`](crate::Device::new) gives it too where the
+    /// translator takes no description of the device, which the floor leaves no device to do.
+    Translation {
+        /// The translator's error.
+        error: metal2vulkan::error::Error,
+        /// The functions of the pipeline state made, each by its own name in its library
+        /// (`MTLFunction`'s `name`), in stage order (the vertex function before the fragment
+        /// function), which the error's text prints: a diagnostic for the program's log, as the
+        /// `NSError`'s text of Metal's failed creation is, that nothing decides by. A stage the
+        /// consumer compiled (`StageSource::Compiled`) has no name here; a sampler state, a
+        /// device and a dispatch's variant of a kernel name none.
+        functions: Box<[String]>,
+    },
+    /// A Metal feature the runtime does not build yet: a typed known gap.
+    Unsupported(Gap),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state), a
+    /// dispatch, or [`ComputePipelineState::prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch):
+    /// a `VkPipeline` of a kernel past the stage bound whose cache data the cache directory does
+    /// not hold, which this process never compiles. The consumer's helper compiles it
+    /// ([`Device::fill_stage`](crate::Device::fill_stage)), and the call is made again. Metal has no
+    /// counterpart: Metal compiles every pipeline in its own compiler service.
+    StageUnfilled(crate::StageRequest),
+    /// A call that needs one of the runtime's threads, after
+    /// [`Device::quiesce`](crate::Device::quiesce) stopped them. Metal has no counterpart.
+    Quiesced,
+}
+
+/// Where the belief that a call must be refused comes from ([`Error::basis`]): the translator's
+/// type, which answers its own errors too. Each variant of [`Refusal`], [`Limit`] and [`Gap`]
+/// declares its own as the last line of its doc comment, `Basis:` and the evidence, which
+/// `docs/REFUSALS.md` lists.
+pub use metal2vulkan::error::RefusalBasis;
+
+/// A call Metal refuses, with what it was asked.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// A buffer of no bytes ([`Device::new_buffer`](crate::Device::new_buffer) with a length of
+    /// 0). Metal answers nil.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max: newBufferWithLength:0 answers nil).
+    EmptyBuffer,
+    /// A buffer longer than [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH)
+    /// ([`Device::new_buffer`](crate::Device::new_buffer)), or a visible-function table whose
+    /// words are
+    /// ([`ComputePipelineState::new_visible_function_table`](crate::ComputePipelineState::new_visible_function_table)):
+    /// a shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which
+    /// the translator may read as signed. Metal answers nil past a device's `maxBufferLength`,
+    /// which the consumer states no larger than this.
+    ///
+    /// Basis: ours (this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind
+    /// address in it).
+    BufferTooLong {
+        /// The buffer's length.
+        length: u64,
+        /// [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH).
+        max: u64,
+    },
+    /// A buffer whose range leaves its block ([`Device::new_buffer`](crate::Device::new_buffer)).
+    /// Metal answers nil for a buffer placed past the end of its heap.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil
+    /// for a 4096-byte buffer at offset 1,047,552).
+    BufferPastBlock {
+        /// The buffer's offset in the block.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+        /// The block's length.
+        block_len: u64,
+    },
+    /// A heap buffer whose range leaves its heap
+    /// ([`Device::new_heap_buffer`](crate::Device::new_heap_buffer)). Metal answers nil for a
+    /// buffer placed past the end of its heap.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil
+    /// for a 4096-byte buffer at offset 1,047,552).
+    HeapBufferPlace {
+        /// The buffer's offset in the heap.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+        /// The heap's bytes.
+        heap_len: u64,
+    },
+    /// A Managed buffer whose bytes are in a Private block
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)): a Managed buffer's
+    /// bytes are the consumer's, which it writes, and a Private block has no pages the consumer
+    /// can write.
+    ///
+    /// Basis: metal-documented (a Managed buffer has a CPU-side copy: `MTLBuffer.h` gives its
+    /// `contents` as "the data pointer of this buffer's shared copy", and `didModifyRange:` names
+    /// the ranges "the CPU has modified").
+    ManagedBlockPrivate {
+        /// The block named.
+        block: BlockId,
+    },
+    /// A Managed buffer given no place for its device copy on a device that keeps one, where
+    /// [`Device::has_unified_memory`](crate::Device::has_unified_memory) is false
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (Metal keeps a Managed buffer's second copy on a Mac with a discrete GPU; the
+    /// consumer places it, as it places every buffer).
+    ManagedCopyMissing,
+    /// A Managed buffer given a place for a device copy on a device that keeps none, where
+    /// [`Device::has_unified_memory`](crate::Device::has_unified_memory) is true
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (on unified memory a Managed buffer is its bytes, as Metal keeps one copy of a
+    /// Managed buffer on Apple silicon).
+    ManagedCopyOnUnified,
+    /// A Managed buffer whose device copy is placed in a block that is not Private
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (shaders reach the device copy in Private memory, device-local where it has
+    /// room, as a discrete GPU's Metal keeps the copy in its own memory).
+    ManagedCopyNotPrivate {
+        /// The block named.
+        block: BlockId,
+    },
+    /// A Managed buffer whose device copy is placed in an exported block
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (Metal places a Managed buffer's second copy itself, so no Metal program puts
+    /// it in memory another API shares).
+    ManagedCopyExported {
+        /// The block named.
+        block: BlockId,
+    },
+    /// A zero fill whose range leaves its block
+    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)), as a buffer placed there
+    /// would.
+    ///
+    /// Basis: ours (the fill stands for the zeroed contents of a buffer placed in the range, and
+    /// Metal answers nil for a buffer placed past the end of its heap).
+    ZeroRangePastBlock {
+        /// The range's offset in the block.
+        offset: u64,
+        /// The range's length.
+        length: u64,
+        /// The block's length.
+        block_len: u64,
+    },
+    /// A zero fill of a Shared block ([`Device::zero_block_range`](crate::Device::zero_block_range)).
+    ///
+    /// Basis: ours (the host maps a Shared block, and its bytes are zeroed through the mapping, as
+    /// a zeroed Shared buffer's are; the fill is for the memory the host does not map).
+    ZeroRangeShared {
+        /// The block named.
+        block: BlockId,
+    },
+    /// An acquire of another API's writes into a block that is not exported
+    /// ([`Block::external_writes_done`](crate::Block::external_writes_done)), or a release to
+    /// another API of a buffer whose block is not exported
+    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external)).
+    /// Metal has no counterpart.
+    ///
+    /// Basis: ours (only an exported block's memory is another API's to write or read).
+    NotExported {
+        /// The block named.
+        block: BlockId,
+    },
+    /// A surface ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) of no
+    /// plane or of more than four, or whose pitch or start multiple is 0, or whose multiples and
+    /// texels have no common multiple in 64 bits; an import of Direct3D 11 textures as a surface
+    /// (`Device::import_d3d11_surface`, on Windows) of no plane or of more than four, which names
+    /// multiples of 1. Metal has no counterpart.
+    ///
+    /// Basis: ours (a DRM format has at most four memory planes, and a layout needs a nonzero
+    /// multiple).
+    SurfacePlanes {
+        /// The planes asked for.
+        planes: usize,
+        /// The pitch multiple asked for.
+        pitch_multiple: u64,
+        /// The start multiple asked for.
+        start_multiple: u64,
+    },
+    /// A changed range that leaves its buffer ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
+    ///
+    /// Basis: ours (the copy of such a range would write past the buffer's device copy).
+    ModifiedRange {
+        /// The range's first byte in the buffer.
+        start: u64,
+        /// The range's length.
+        length: u64,
+        /// The buffer's length.
+        buffer_length: u64,
+    },
+    /// A call on a command buffer already committed: encoding, adding a handler, enqueueing or
+    /// committing again.
+    ///
+    /// Basis: metal-documented (Metal's validation asserts "commit an already committed command
+    /// buffer", "Completed handler provided after commit call" and "Scheduled handler provided
+    /// after commit call").
+    Committed,
+    /// A call a scheduled handler may not make
+    /// ([`CommandBuffer::add_scheduled_handler`](crate::CommandBuffer::add_scheduled_handler)):
+    /// [`CommandBuffer::commit`](crate::CommandBuffer::commit), the waits
+    /// ([`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled),
+    /// [`CommandBuffer::wait_until_completed`](crate::CommandBuffer::wait_until_completed),
+    /// [`SharedEvent::wait_until_signaled_value`](crate::SharedEvent::wait_until_signaled_value)),
+    /// the uploads and readbacks ([`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`Texture::upload_region`](crate::Texture::upload_region),
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes),
+    /// [`Device::zero_block_range`](crate::Device::zero_block_range)), and the objects that take
+    /// an upload ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer), and
+    /// [`Device::new_buffer`](crate::Device::new_buffer) zeroing a buffer in a Private block).
+    /// Refused on every device and whatever the runtime holds: a scheduled handler runs on the
+    /// submit thread, before its command buffer's submission, and each of these calls may wait
+    /// for that thread to submit. Metal runs a scheduled handler on a thread of its own, where
+    /// each of these calls runs.
+    ///
+    /// Basis: ours (the consumer's scheduled handlers run on the submit thread, and the one
+    /// consumer's make none of these calls; a guest's scheduled handler runs in the guest).
+    InScheduledHandler,
+    /// A wait, in a handler or a listener, for what the runtime thread that runs it would have to
+    /// do first, so it would never end: on the completion thread (a completed handler or a
+    /// listener), [`CommandBuffer::wait_until_completed`](crate::CommandBuffer::wait_until_completed)
+    /// for a command buffer not yet completed,
+    /// [`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled) for one
+    /// not yet scheduled, and
+    /// [`SharedEvent::wait_until_signaled_value`](crate::SharedEvent::wait_until_signaled_value)
+    /// for a value not yet reached; in any handler or listener,
+    /// [`CommandQueue::command_buffer`](crate::CommandQueue::command_buffer) on a queue whose
+    /// maximum count of command buffers are made and not yet completed. A wait already met
+    /// answers at once there. The condition is the program's own state: what it committed, and
+    /// what has completed. Metal runs handlers on a thread of its own, where the wait would end.
+    ///
+    /// Basis: ours (no wait of the runtime's hangs by construction).
+    WaitOnOwnThread,
+    /// An event, a buffer, a texture or a pipeline state of another device in an encode call
+    /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
+    /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a
+    /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder),
+    /// [`RenderCommandEncoder`](crate::RenderCommandEncoder) or
+    /// [`BlitCommandEncoder`](crate::BlitCommandEncoder) call), or a block of another device
+    /// given to [`Device::release_block`](crate::Device::release_block).
+    ///
+    /// Basis: ours (an event's semaphore, a buffer's block, a texture's image, a pipeline and a
+    /// block belong to the `VkDevice` that made them).
+    OtherDevice,
+    /// A queue that may hold no command buffer
+    /// ([`Device::new_command_queue`](crate::Device::new_command_queue) with a count of 0).
+    ///
+    /// Basis: ours (its first `commandBuffer` call would wait forever).
+    NoCommandBuffers,
+    /// A second encoder, an encode call, or a commit or enqueue, while an encoder of the command
+    /// buffer is open.
+    ///
+    /// Basis: metal-documented (a command buffer has one active encoder at a time, ended by
+    /// `endEncoding` before another is made or the command buffer is committed).
+    EncoderOpen,
+    /// A dispatch or a draw with no pipeline state set.
+    ///
+    /// Basis: metal-documented (a compute dispatch needs a compute pipeline state set first, and a
+    /// draw a render pipeline state).
+    NoPipeline,
+    /// A range of an indirect command buffer's commands past them, in an execution
+    /// ([`RenderCommandEncoder::execute_commands_in_buffer`](crate::RenderCommandEncoder::execute_commands_in_buffer)),
+    /// a reset or an optimization
+    /// ([`BlitCommandEncoder::reset_commands_in_buffer`](crate::BlitCommandEncoder::reset_commands_in_buffer),
+    /// [`BlitCommandEncoder::optimize_indirect_command_buffer`](crate::BlitCommandEncoder::optimize_indirect_command_buffer)),
+    /// or an execution range a buffer holds at an offset that is not a multiple of 4 or whose 8
+    /// bytes leave the buffer
+    /// ([`RenderCommandEncoder::execute_commands_in_buffer_with_range`](crate::RenderCommandEncoder::execute_commands_in_buffer_with_range)).
+    ///
+    /// Basis: metal-documented (each call names commands of the buffer, and the offset of a range
+    /// a buffer holds must be a multiple of 4 bytes).
+    CommandRange,
+    /// A draw of patches with a render pipeline state whose vertex function is not a
+    /// post-tessellation one, or a draw of primitives with one whose vertex function is.
+    ///
+    /// Basis: metal-measured (an M4: plain Metal stops its process over a patch draw with a
+    /// pipeline that is not a tessellation one, its validation off; Metal's validation stops a
+    /// draw of primitives with a tessellation pipeline).
+    PatchDraw,
+    /// A draw of patches while the encoder has no tessellation factor buffer
+    /// (`setTessellationFactorBuffer:offset:instanceStride:`).
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal ends the process, SIGSEGV,
+    /// at a quad patch draw with no tessellation factor buffer, where the same draw with one set
+    /// runs and paints the target, the API validation layer off).
+    NoTessellationFactorBuffer,
+    /// [`Device::new_render_pipeline_state`](crate::Device::new_render_pipeline_state) of a vertex
+    /// function that writes `[[point_size]]` under the line or the triangle input primitive
+    /// topology class (`inputPrimitiveTopology`). The point and the unspecified class make it.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, every class crossed with both shapes
+    /// of vertex function: Metal's pipeline creation fails with `Vertex shader writes point size
+    /// but inputPrimitiveTopology is MTLPrimitiveTopologyClassLine`, and its `Triangle`
+    /// counterpart; the conformance crate's `topology-class-point-size-function` compares it).
+    PointSizeTopology {
+        /// The class the descriptor names: `Line` or `Triangle`.
+        class: PrimitiveTopologyClass,
+    },
+    /// A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`,
+    /// `setBufferOffset`, `setThreadgroupMemoryLength`).
+    ///
+    /// Basis: metal-documented (the buffer argument table has 31 entries per stage).
+    BufferIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A texture argument index past Metal's 128 entries (`setTexture`).
+    ///
+    /// Basis: metal-documented (the texture argument table has 128 entries per stage on Apple
+    /// GPUs).
+    TextureArgumentIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A sampler argument index past Metal's 16 entries (`setSamplerState`).
+    ///
+    /// Basis: metal-documented (the sampler argument table has 16 entries per stage).
+    SamplerArgumentIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A visible-function table's entry at or past its size
+    /// ([`VisibleFunctionTable::set_function`](crate::VisibleFunctionTable::set_function),
+    /// `set_functions`), which writes nothing.
+    ///
+    /// Basis: ours (the runtime writes no byte past a table's words).
+    FunctionTableIndex {
+        /// The last index asked for.
+        index: u64,
+        /// The table's size, its `functionCount`.
+        count: u32,
+    },
+    /// A consumer's answer to
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)'s
+    /// numbered samplers with another count of indices. Metal has no counterpart: Metal numbers
+    /// the samplers itself.
+    ///
+    /// Basis: ours (each numbered sampler takes one index).
+    SamplerIds {
+        /// The samplers the state numbers.
+        numbered: usize,
+        /// The indices given.
+        given: usize,
+    },
+    /// `setBufferOffset` at an index where no buffer is bound, or a draw whose vertex descriptor
+    /// reads a vertex buffer index where none is bound.
+    ///
+    /// Basis: ours (there is no buffer whose offset to change, and none whose vertices the draw
+    /// reads; Metal's validation stops such a draw).
+    NoBufferAtIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A threadgroup of no threads, or of more than Metal's `maxTotalThreadsPerThreadgroup` for
+    /// the kernel (a required size's threads, where the descriptor requires one). One within it
+    /// and past the state's on this device is the device's [`Limit::ThreadgroupThreads`].
+    ///
+    /// Basis: metal-documented (a threadgroup's threads total at most the state's
+    /// `maxTotalThreadsPerThreadgroup`).
+    ThreadgroupSize {
+        /// The threadgroup size asked for.
+        size: [u32; 3],
+        /// The state's `maxTotalThreadsPerThreadgroup`.
+        max: u32,
+    },
+    /// An imageblock size
+    /// ([`ComputeCommandEncoder::set_imageblock_size`](crate::ComputeCommandEncoder::set_imageblock_size))
+    /// whose width or height is not a power of two, 0 included, or whose cells are more than 1024,
+    /// whatever the state's `maxTotalThreadsPerThreadgroup`.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `imageblock_size_rules.m` in
+    /// the conformance crate, job m3-max-70002: Metal's validation layer stops each at the call,
+    /// `width(24) must be a power of 2.`, `height(12) must be a power of 2.`,
+    /// `width(0) must be a power of 2.` and
+    /// `width(64)*height(32) must be less than or equal to 1024`; it takes 16 by 16, 1024 by 1,
+    /// 1 by 1024, 16 by 16 for a state of 64 threads, and a size set before the pipeline state).
+    ImageblockSize {
+        /// The width asked for.
+        width: u32,
+        /// The height asked for.
+        height: u32,
+    },
+    /// An indirect dispatch's or draw's argument offset that is not a multiple of 4, which Metal's
+    /// `indirectBufferOffset` must be
+    /// ([`ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer`](crate::ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer)
+    /// and the indirect draws of [`RenderCommandEncoder`](crate::RenderCommandEncoder)).
+    ///
+    /// Basis: metal-documented (MTLComputeCommandEncoder.h for
+    /// `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`, and
+    /// MTLRenderCommandEncoder.h for the indirect `drawPrimitives` and `drawIndexedPrimitives`:
+    /// "indirectBufferOffset must be a multiple of 4"; Apple's page for the indirect
+    /// `drawPatches` sends its offset to the feature set tables, whose minimum constant buffer
+    /// offset alignment is 4 bytes).
+    IndirectOffset {
+        /// The offset asked for.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+    },
+    /// An indirect dispatch's or draw's arguments, at an offset that is a multiple of 4, that run
+    /// past the buffer's end: fewer than the arguments' bytes lie after the offset, 12 for a
+    /// dispatch (three 32-bit counts), 20 for an indexed draw, 16 for another draw. The calls'
+    /// Metal headers state no such rule.
+    ///
+    /// Basis: ours (`vkCmdDispatchIndirect`, `vkCmdDrawIndirect` and `vkCmdDrawIndexedIndirect`
+    /// read their arguments inside the buffer, `VUID-vkCmdDispatchIndirect-offset-00407`,
+    /// `VUID-vkCmdDrawIndirect-drawCount-00487` and `VUID-vkCmdDrawIndexedIndirect-drawCount-00539`).
+    IndirectArgumentsPastEnd {
+        /// The offset asked for.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+        /// The arguments' bytes.
+        needed: u64,
+    },
+    /// A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer
+    /// bound where its address, the buffer's `gpuAddress` plus the bind offset, is not a multiple
+    /// of the argument's alignment (`air.arg_type_align_size`, at most 16). Plain Metal runs such a dispatch at addresses of
+    /// its own: an Apple M3 Max reaches each element at its address rounded down to the smaller of
+    /// the element's alignment and 4 (`probes/misaligned_buffer_binds.m` in the conformance
+    /// crate).
+    ///
+    /// Basis: metal-documented (Metal's API validation refuses the bind offset: "must be a
+    /// multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max,
+    /// macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate).
+    BufferOffsetAlignment {
+        /// The buffer argument index.
+        index: u32,
+        /// The bind offset.
+        offset: u64,
+        /// The argument's alignment in bytes.
+        alignment: u64,
+    },
+    /// A grant of an index already granted ([`Device::grant_indices`](crate::Device::grant_indices)).
+    /// Metal has no counterpart: Metal chooses its resource IDs itself.
+    ///
+    /// Basis: ours (each index has one grant, so each resource ID names one object).
+    IndicesGranted {
+        /// The class of the index.
+        class: IndexClass,
+        /// The first index of the range that is granted already.
+        index: u32,
+    },
+    /// A texture, a sampler state or a pipeline state's constexpr sampler at an index no grant
+    /// of its class holds ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)). Metal
+    /// has no counterpart.
+    ///
+    /// Basis: ours (an object takes an index the consumer was granted).
+    IndicesNotGranted {
+        /// The class of the index.
+        class: IndexClass,
+        /// The index that is not granted.
+        index: u32,
+    },
+    /// A texture shaders reach made without an index, or one they do not reach made with one
+    /// ([`Device::new_texture`](crate::Device::new_texture)). Shaders reach a texture made for
+    /// shader reads or writes, and a colour render target (a render-target usage of a pixel
+    /// format with no depth or stencil), which a fragment function reads through its attachment;
+    /// a depth or stencil target made for neither they do not. A texture shaders reach only
+    /// through its views is made without one
+    /// ([`Device::new_texture_for_views`](crate::Device::new_texture_for_views)). Metal has no
+    /// counterpart: Metal gives every texture a resource ID itself.
+    ///
+    /// Basis: ours (an index is an element of set 1's texture arrays, which only shaders read).
+    TextureIndex {
+        /// The index given.
+        index: Option<u32>,
+    },
+    /// A texture shaders reach through its views alone, made without an index of its own
+    /// ([`Device::new_texture_for_views`](crate::Device::new_texture_for_views), a surface's or a
+    /// Direct3D 11 surface's plane made with no index, [`PlaneSpec::index`](crate::PlaneSpec)),
+    /// bound to a function's texture slot
+    /// ([`ComputeCommandEncoder::set_texture`](crate::ComputeCommandEncoder::set_texture),
+    /// [`RenderCommandEncoder::set_vertex_texture`](crate::RenderCommandEncoder::set_vertex_texture),
+    /// [`RenderCommandEncoder::set_fragment_texture`](crate::RenderCommandEncoder::set_fragment_texture)).
+    /// A slot reads the texture at its index, and this one has none: every read would answer the
+    /// null descriptor's zeros. Bind a view of it, which has an index of its own. A texture no
+    /// shader reaches (a depth or stencil target whose usage asks neither shader reads nor
+    /// writes) has no index either, and binds, as Metal's does: its usage asks no shader read of
+    /// it. Metal has no counterpart: Metal gives every texture a resource ID.
+    ///
+    /// Basis: ours (a slot pushes its texture's index, an element of set 1's texture arrays).
+    TextureWithoutIndex {
+        /// The texture argument index it was bound at.
+        index: u32,
+    },
+    /// A texture with a width, height or depth of 0.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts
+    /// "MTLTextureDescriptor has width of zero", and the same for a height of zero).
+    TextureZeroExtent,
+    /// A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that
+    /// is not 3D.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type
+    /// MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2).
+    TextureExtentForType,
+    /// A cube texture whose width and height differ.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts
+    /// "MTLTextureDescriptor width must equal height for cube textures").
+    TextureCubeNotSquare,
+    /// A texture with an array length of 0, or other than 1 of a type that is not an array.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts
+    /// "MTLTextureDescriptor has arrayLength of zero", where an array length of 2 is made).
+    TextureArrayLength {
+        /// The array length asked for.
+        array_length: u32,
+    },
+    /// A texture with a mipmap level count of 0, more than its full chain's, or more than 1 of a
+    /// multisample or 1D type.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "requests 5
+    /// mipmap levels, but the dimensions (8, 8, 1) can only support a maxiumum of 4 levels", and
+    /// the same for 0).
+    TextureLevelCount {
+        /// The levels asked for.
+        levels: u32,
+        /// The most the type and extent take.
+        max: u32,
+    },
+    /// A texture with a sample count of 0, or other than 1 of a type that is not multisample.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "has sampleCount
+    /// set but is using a type that does not allow sampleCount" for 0 and for 2 of a 2D texture).
+    TextureSampleCount {
+        /// The sample count asked for.
+        sample_count: u32,
+    },
+    /// A texture with a swizzle other than each channel from itself and shader-write or
+    /// render-target usage.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "Texture swizzling
+    /// is not compatable with MTLTextureUsageShaderWrite", where a swizzle of read usage alone is
+    /// made).
+    TextureSwizzleWithWrites,
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a Private or Memoryless texture.
+    ///
+    /// Basis: metal-documented (Apple's documentation of `MTLStorageModePrivate`: "The resource is
+    /// accessible only to the GPU.").
+    TextureBytesPrivate,
+    /// [`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy
+    /// ([`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture))
+    /// of a level or slice past the texture's, or of a region that leaves the level or is off the
+    /// format's block grid.
+    ///
+    /// Basis: ours (no texel of the texture is there to copy).
+    TextureRegion {
+        /// The level asked for.
+        level: u32,
+        /// The slice asked for.
+        slice: u32,
+    },
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) with rows closer than a row of the
+    /// region, images closer than an image of it, or bytes too few for it.
+    ///
+    /// Basis: ours (the call would read or write past the bytes it is given, or one texel's
+    /// bytes over another's).
+    TextureBytesLayout {
+        /// The bytes from one row's start to the next's.
+        bytes_per_row: u64,
+        /// The bytes from one image's start to the next's.
+        bytes_per_image: u64,
+        /// The bytes given.
+        len: u64,
+    },
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
+    /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
+    /// whose offset or row stride, for a format of single texels, is no whole number of its
+    /// texels; whose rows or images are closer than the region's; or whose region runs past the
+    /// buffer's end. A row stride of a region one row high and an image stride of one one image
+    /// deep are not read.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `blit_buffer_copy_rules.m` in
+    /// the conformance crate, jobs m3-max-43541 and m3-max-43545: Metal's validation layer stops an
+    /// RGBA8Unorm offset of 2, `sourceOffset (2) must be a multiple of 4 bytes`, a row stride of
+    /// 18, `sourceBytesPerRow (18) must be a multiple of 4 bytes`, and the same of a copy into a
+    /// buffer, a row stride of 12 for rows of 16 bytes, an image stride of 12 for images of 16,
+    /// and a region 16 bytes past the buffer's end, `totalBytesUsed(4112) must be <= [sourceBuffer
+    /// length](4096)`; it takes an R8Unorm offset of 2, a row stride of 0 for one row, image
+    /// strides of no whole number of rows, and an image stride on a 2D texture and on a slice of a
+    /// 1D array).
+    BufferCopyLayout {
+        /// The region's first byte in the buffer.
+        offset: u64,
+        /// The bytes from one row's start to the next's.
+        bytes_per_row: u64,
+        /// The bytes from one image's start to the next's.
+        bytes_per_image: u64,
+        /// The buffer's length.
+        len: u64,
+    },
+    /// [`BlitCommandEncoder::fill_buffer`](crate::BlitCommandEncoder::fill_buffer) of an empty
+    /// range, or of one past the buffer's end.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `blit_fill_rules.m` in the
+    /// conformance crate, job m3-max-43573: Metal's validation layer stops both,
+    /// `range.length(0) must not be 0` and
+    /// `(range.location + range.length)(68) must be <= [buffer length](64)`).
+    FillRange {
+        /// The range's first byte.
+        start: u64,
+        /// The byte after its last.
+        end: u64,
+        /// The buffer's length.
+        len: u64,
+    },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of an empty range of levels
+    /// or slices, or of one past the texture's.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the
+    /// conformance crate, job m3-max-43677: Metal's validation layer stops each,
+    /// `(newLevelRange.location + newLevelRange.length)(4) must be <= [texture mipmapLevelCount](3)`,
+    /// `newLevelRange.length must not be 0` and
+    /// `(newSliceRange.location + newSliceRange.length)(4) must be <= (3)`).
+    TextureViewRange {
+        /// The view's first level in the texture.
+        level: u32,
+        /// Its levels.
+        level_count: u32,
+        /// The view's first slice in the texture: an array's element, or a cube's face.
+        slice: u32,
+        /// Its slices.
+        slice_count: u32,
+    },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a slice count the view's
+    /// type does not take: other than one for a 2D view, other than six for a cube, or not a
+    /// multiple of six for a cube array.
+    ///
+    /// Basis: metal-documented (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`
+    /// page: "The length value of the sliceRange parameter needs to be 6 if the new texture type
+    /// value is MTLTextureType.typeCube, or a multiple of 6 if the new texture type value is
+    /// MTLTextureType.typeCubeArray"; and measured on an Apple M3 Max, macOS 27.0.1: plain Metal
+    /// asserts "newSliceRange.length(2) must equal (1) for textureType (MTLTextureType2D)").
+    TextureViewSlices {
+        /// The view's texture type.
+        texture_type: TextureType,
+        /// Its slices.
+        slice_count: u32,
+    },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a pixel format Metal does
+    /// not view the texture as: with `PixelFormatView` usage, any but its own, its sRGB sibling, a
+    /// combined depth and stencil format's stencil and the uncompressed colour formats of the same
+    /// bytes a texel (`metal2vulkan::metal::format::views_with_usage`); without it, also those
+    /// colour formats but one held in the image's own Vulkan format, its component mapping alone
+    /// another, which Metal's validation stops and the runtime makes, as plain Metal makes it.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the
+    /// conformance crate, jobs m3-max-43677 and m3-max-59523: Metal's validation layer stops a
+    /// view of another format of a texture of `ShaderRead` usage, `R32Uint`, `RGBA8Uint`,
+    /// `BGRA8Unorm` and `BGRA8Unorm_sRGB` of `RGBA8Unorm`, `A8Unorm`, `R8Snorm` and `R8Uint` of
+    /// `R8Unorm`, `R16Unorm` of `RG8Unorm`, "texture usage (0x01) doesn't specify
+    /// MTLTextureUsagePixelFormatView (0x10)", and makes it where the usage adds
+    /// `PixelFormatView`; plain Metal makes each, a blit out of it reading the texture's bytes;
+    /// Apple's `makeTextureView` and `MTLTextureUsage.pixelFormatView` pages state the rest).
+    TextureViewFormat {
+        /// The texture's pixel format.
+        texture: PixelFormat,
+        /// The view's.
+        view: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps) of a
+    /// texture of more than one level whose pixel format is not a colour-renderable, filterable
+    /// one: a depth or stencil, compressed, YCbCr or integer format.
+    ///
+    /// Basis: metal-measured (Apple's `generateMipmaps(for:)` page: mipmap generation works only
+    /// for textures with colour-renderable and colour-filterable pixel formats; Metal's API
+    /// validation stops the others, measured on an Apple M3 Max and an M4).
+    MipmapFormat {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
+    /// between textures of two pixel formats, or of two sample counts.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `blit_copy_format_pairs.m` in
+    /// the conformance crate: Metal's validation layer stops every pair of two formats it was
+    /// given, sRGB, integer, float, channel order, depth and compressed pairs among them, with
+    /// `[sourceTexture pixelFormat](...) must equal [destinationTexture pixelFormat](...)`, and a
+    /// source of four samples into one of one with
+    /// `[sourceTexture sampleCount](4) must equal [destinationTexture sampleCount](1)`).
+    TextureCopyMismatch {
+        /// The source texture's pixel format.
+        source: PixelFormat,
+        /// The destination texture's pixel format.
+        destination: PixelFormat,
+    },
+    /// A Managed texture's bytes the device cannot copy in place
+    /// ([`Device::new_managed_texture`](crate::Device::new_managed_texture)): a place for each
+    /// level and slice, in order, not given; a buffer the host does not reach; a place whose rows
+    /// are not a whole number of texel blocks apart, whose images are not a whole number of rows
+    /// apart, or whose first byte in the buffer's block is not a multiple of the texel block's
+    /// bytes (of 4 for a depth or stencil format, its rows too); or a place whose level's bytes
+    /// leave the buffer. Also [`Texture::upload_region`](crate::Texture::upload_region) on a
+    /// texture without named bytes, or of a depth or stencil region whose first byte is not a
+    /// multiple of 4.
+    ///
+    /// Basis: ours (a buffer-to-image copy reads a place only so laid out, and the consumer's
+    /// bytes are the place the copy reads).
+    ManagedTextureBytes {
+        /// The level of the first place refused; the texture's level count where the count of
+        /// places is wrong.
+        level: u32,
+        /// The slice of the first place refused; 0 where the count of places is wrong.
+        slice: u32,
+    },
+    /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) whose rows
+    /// are not a whole number of texels apart or are closer than a row, whose offset is not a
+    /// whole number of texels, or whose texels run past the buffer; a texture buffer
+    /// (`MTLTextureTypeTextureBuffer`) whose `bytesPerRow` is less than its width's bytes, or
+    /// whose texels run past the buffer.
+    ///
+    /// Basis: ours (a linear image and a copy read rows whole texels apart from a texel's start,
+    /// and texels past the buffer would lie in memory it does not hold).
+    BufferTextureLayout {
+        /// The texture's offset in the buffer.
+        offset: u64,
+        /// Its rows' pitch.
+        bytes_per_row: u64,
+        /// The buffer's length.
+        len: u64,
+    },
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) over a buffer
+    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)) whose offset is not a multiple of the
+    /// device's minimum texture-buffer alignment for its pixel format
+    /// ([`Device::minimum_texture_buffer_alignment`](crate::Device::minimum_texture_buffer_alignment)),
+    /// which may differ from what another device answers for the same format. Plain Metal takes
+    /// an offset off its own alignment, which Metal's validation stops (the conformance crate's
+    /// `buffer-textures-made`: offsets of 4, 8, 20 and 33 bytes of an `R32Uint` texture buffer,
+    /// on an Apple M3 Max); a Vulkan buffer view takes none off the device's.
+    ///
+    /// Basis: metal-documented (`MTLDevice.h`: `minimumTextureBufferAlignmentForPixelFormat:`
+    /// "Returns the minimum alignment required for offset and rowBytes when creating a texture
+    /// buffer from a buffer").
+    TextureBufferAlignment {
+        /// The texture buffer's pixel format.
+        pixel_format: PixelFormat,
+        /// Its offset in the buffer.
+        offset: u64,
+        /// The device's minimum texture-buffer alignment for the pixel format.
+        alignment: u64,
+    },
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) made other than over a buffer:
+    /// [`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_texture_for_views`](crate::Device::new_texture_for_views),
+    /// [`Device::new_heap_texture`](crate::Device::new_heap_texture),
+    /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views),
+    /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align),
+    /// [`Device::new_managed_texture`](crate::Device::new_managed_texture) and
+    /// [`Device::new_drawable_texture`](crate::Device::new_drawable_texture) of a texture buffer's
+    /// descriptor. The consumer places a buffer of the texture buffer's bytes, as it places every
+    /// buffer, and makes it over that buffer with
+    /// [`Buffer::new_texture`](crate::Buffer::new_texture), where Metal's
+    /// `newTextureWithDescriptor:` of a texture buffer's descriptor allocates the bytes itself.
+    ///
+    /// Basis: ours (a texture buffer's texels are a buffer's bytes, read through a buffer view of
+    /// the buffer; the runtime places no buffer of its own).
+    TextureBufferNotOverBuffer,
+    /// A heap texture whose image does not lie in its heap
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture),
+    /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views)): past
+    /// the heap's end at its offset, at an offset in the block that is not a multiple of the
+    /// image's alignment, or in a heap range that leaves its block. The size and alignment are the
+    /// device's image's, as
+    /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)
+    /// answers them, which may exceed what another device answered for the same descriptor.
+    ///
+    /// Basis: ours (an image bound past its heap's range would take memory the heap does not
+    /// hold, and Vulkan binds an image only at its alignment).
+    HeapTexturePlace {
+        /// The texture's offset in the heap.
+        offset: u64,
+        /// The bytes the texture takes.
+        size: u64,
+        /// What its offset in the block is to be a multiple of.
+        align: u64,
+        /// The heap's bytes.
+        heap_len: u64,
+    },
+    /// A drawable's texture ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture))
+    /// of a descriptor that is not a 2D texture of one level of the swapchain's image extent, or
+    /// over a swapchain whose images have more than one array layer. Metal has no counterpart: a
+    /// `CAMetalLayer` makes its drawables' textures itself, each a 2D texture of the layer's
+    /// drawable size.
+    ///
+    /// Basis: ours (the texture is the swapchain's image, which the descriptor states).
+    DrawableDescriptor,
+    /// A drawable's texture ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture))
+    /// over a swapchain whose image format is not the one the runtime holds the descriptor's pixel
+    /// format in on this device. The formats are `VkFormat` values.
+    ///
+    /// Basis: ours (the texture's views and copies read the image in the format the runtime holds
+    /// the pixel format in).
+    DrawableFormat {
+        /// The descriptor's pixel format.
+        pixel_format: PixelFormat,
+        /// The format the runtime holds it in.
+        held: i32,
+        /// The swapchain's image format.
+        swapchain: i32,
+    },
+    /// A drawable's texture ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture))
+    /// over a swapchain whose image usage lacks some of what the runtime's own texture of the
+    /// descriptor has: transfer source and destination always, as the CPU and blits reach any
+    /// Metal texture, and the sampled, storage and colour attachment usage of its shader-read,
+    /// shader-write and render-target usage. `missing` is a `VkImageUsageFlags` value.
+    ///
+    /// Basis: ours (each of the texture's uses takes its image's usage).
+    DrawableUsage {
+        /// The usage the swapchain's images lack.
+        missing: u32,
+    },
+    /// [`Texture::drawable_acquired`](crate::Texture::drawable_acquired) or
+    /// [`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable) of a texture
+    /// that is not over a swapchain's image, or a view of one.
+    ///
+    /// Basis: ours (only a swapchain's image is acquired and presented).
+    NotDrawable,
+    /// [`Texture::drawable_acquired`](crate::Texture::drawable_acquired) of a drawable acquired
+    /// and not presented since.
+    ///
+    /// Basis: ours (a swapchain's image is acquired again only once it was presented).
+    DrawableAcquired,
+    /// [`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable) of a drawable
+    /// not acquired since its last present, or one a command buffer not yet committed already
+    /// presents.
+    ///
+    /// Basis: ours (a swapchain's image is presented once for each acquire).
+    DrawableNotAcquired,
+    /// [`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable) with a
+    /// semaphore the command buffer already signals for another drawable.
+    ///
+    /// Basis: ours (Vulkan signals a binary semaphore only while it is unsignalled, and each
+    /// present waits on a semaphore of its own).
+    DrawableSemaphoreRepeated,
+    /// A copy between buffers
+    /// ([`BlitCommandEncoder::copy_from_buffer_to_buffer`](crate::BlitCommandEncoder::copy_from_buffer_to_buffer))
+    /// whose range, `size` bytes from `offset`, leaves the source or the destination.
+    ///
+    /// Basis: metal-documented (Metal's validation stops a copy past either buffer's length).
+    BufferCopyRange {
+        /// The range's offset in the buffer it leaves.
+        offset: u64,
+        /// The bytes copied.
+        size: u64,
+        /// That buffer's length.
+        len: u64,
+    },
+    /// A copy between buffers whose source and destination share bytes: one buffer's
+    /// overlapping ranges, or two buffers that overlap in one block.
+    ///
+    /// Basis: ours (Metal states no result for such a copy, and `vkCmdCopyBuffer` reads no byte
+    /// it also writes, `VUID-vkCmdCopyBuffer-pRegions-00117`; the runtime does not emulate one).
+    BufferCopyOverlap {
+        /// The offset in the source.
+        source_offset: u64,
+        /// The offset in the destination.
+        destination_offset: u64,
+        /// The bytes copied.
+        size: u64,
+    },
+    /// A render pass attachment
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder))
+    /// whose texture was made without `RenderTarget` usage.
+    ///
+    /// Basis: metal-documented (a texture a render pass renders into needs
+    /// `MTLTextureUsageRenderTarget`; Metal's validation stops the descriptor).
+    AttachmentUsage {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A store action that resolves (`MultisampleResolve` or `StoreAndMultisampleResolve`), on a
+    /// render pass attachment or set by its encoder, for an attachment with no resolve texture.
+    ///
+    /// Basis: metal-documented (`MTLRenderPass.h`: `resolveTexture` is "Only used (and
+    /// required) if the store action is set to MTLStoreActionMultisampleResolve").
+    ResolveTexture,
+    /// A resolve of a render pass color attachment of an integer pixel format.
+    ///
+    /// Basis: metal-documented (Metal's validation asserts that an integer color format "cannot
+    /// be a MSAA resolve target", and plain Metal writes values no sample holds).
+    ResolveFormat {
+        /// The attachment's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A render pass attachment or resolve texture of a level or slice past its texture's: its own
+    /// slice, or the last of the slices a layered pass renders from it
+    /// (`renderTargetArrayLength`); or a 3D texture's depth plane past its level's depth.
+    ///
+    /// Basis: ours (no texel of the texture is there to render into).
+    AttachmentPlace {
+        /// The level asked for.
+        level: u32,
+        /// The slice asked for: the attachment's own, or the last its pass renders; a 3D texture's
+        /// depth plane.
+        slice: u32,
+    },
+    /// A render pass color attachment of a depth or stencil pixel format, a depth attachment of a
+    /// format without depth, or a stencil attachment of a format without stencil.
+    ///
+    /// Basis: metal-documented (a color attachment takes a color-renderable format, a depth
+    /// attachment a format with depth and a stencil attachment a format with stencil; Metal's
+    /// validation stops the descriptor).
+    AttachmentFormat {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A render pass with no attachment whose `renderTargetWidth` or `renderTargetHeight` is 0,
+    /// or whose `defaultRasterSampleCount` is 0, Metal's default.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, the API validation layer off,
+    /// m3-max-62174, `probes/no_attachment_passes.m`: a side of 0 makes no encoder, nil, and a
+    /// count of 0 ends the process at the encoder, SIGABRT, where 64 by 64 pixels at 1 sample
+    /// makes one).
+    NoAttachmentPass {
+        /// `renderTargetWidth`.
+        width: u32,
+        /// `renderTargetHeight`.
+        height: u32,
+        /// `defaultRasterSampleCount`.
+        samples: u32,
+    },
+    /// A draw whose vertex descriptor reads a vertex buffer at an offset at or past the buffer's
+    /// length.
+    ///
+    /// Basis: metal-documented (a buffer's offset lies inside it; Metal's validation stops the
+    /// bind).
+    VertexBufferOffset {
+        /// The vertex buffer index.
+        index: u32,
+        /// The offset bound.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+    },
+    /// An indexed draw whose index buffer offset is not a multiple of the index size, or whose
+    /// indices leave the buffer.
+    ///
+    /// Basis: metal-documented (the offset is a multiple of the index size and the indices lie in
+    /// the buffer; Metal's validation stops the draw).
+    IndexBufferOffset {
+        /// The offset asked for.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+    },
+    /// A tessellation factor buffer whose factors, at its address plus the offset, start at an
+    /// odd byte: a factor is a `half`. An offset 2 past a multiple of 4 is read at that byte, as
+    /// plain Metal reads it (Metal probe case `factor_offset_2` on an M4).
+    ///
+    /// Basis: metal-documented (`setTessellationFactorBuffer:offset:instanceStride:`'s offset is a
+    /// multiple of 4; Metal's validation stops a patch draw with any other).
+    TessellationFactorOffset {
+        /// The offset asked for.
+        offset: u64,
+    },
+    /// An indirect dispatch's arguments, an indexed draw's indices, or a visibility result, at a
+    /// byte of the allocation the buffer's block lies in (its device copy's, for a Managed buffer
+    /// with one) that is not a multiple of 4, of the index size, or of 8.
+    ///
+    /// Metal's offset rules keep each at such a multiple of the buffer's start, so only a buffer
+    /// that starts off it meets this: a no-copy buffer
+    /// (`newBufferWithBytesNoCopy:length:options:deallocator:`) over a pointer that is not such a
+    /// multiple, which documented Metal does not allow, its pointer being page-aligned. The
+    /// consumer places every other buffer at an aligned byte. Such a buffer is still made, and
+    /// every other use of it runs: only the dispatch or draw that reads its arguments or indices,
+    /// or the visibility result mode set at the offset, is refused.
+    ///
+    /// Basis: ours (`vkCmdDispatchIndirect` reads its arguments at a multiple of 4 in the
+    /// `VkBuffer`, `vkCmdBindIndexBuffer` takes indices at a multiple of their size in the
+    /// memory, and `vkCmdCopyQueryPoolResults` writes 64-bit results at a multiple of 8,
+    /// `VUID-vkCmdCopyQueryPoolResults-flags-00823`; a Metal buffer starts at an aligned address,
+    /// so Metal's offset rules alone keep each aligned there).
+    ArgumentPlace {
+        /// The byte of the allocation the arguments, indices or result start at: their block's
+        /// offset there ([`BlockInfo::offset`](crate::BlockInfo::offset)) plus their place in the
+        /// block.
+        place: u64,
+        /// The multiple Vulkan reads or writes them at: 4, the index size, or 8.
+        alignment: u64,
+    },
+    /// A viewport with a field that is NaN or infinite (but its origin's x, which draws nothing).
+    ///
+    /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops a NaN or
+    /// infinite origin; the other fields are taken by the same rule).
+    ViewportNotFinite,
+    /// A draw under a depth-stencil state that tests the stencil, in a pass without a stencil
+    /// attachment.
+    ///
+    /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops the draw; plain
+    /// Metal tests it against a hidden stencil of 0 that the runtime does not keep).
+    StencilAttachment,
+    /// A visibility result mode but `Disabled` (`setVisibilityResultMode:offset:`) in a pass
+    /// with no visibility result buffer.
+    ///
+    /// Basis: metal-documented (Apple's page for `setVisibilityResultMode(_:offset:)`: "To create
+    /// a render pass that can enable visibility testing, assign an MTLBuffer instance to the
+    /// visibilityResultBuffer property of an MTLRenderPassDescriptor").
+    NoVisibilityResultBuffer,
+    /// A visibility result mode but `Disabled` at an offset that is not a multiple of 8, or whose
+    /// 8 bytes run past the visibility result buffer.
+    ///
+    /// Basis: metal-documented (`MTLRenderCommandEncoder.h`: "offset must be a multiple of 8";
+    /// Apple's page for `visibilityResultBuffer`: "The GPU stores visibility results as 64-bit
+    /// integers, so you need to reserve 8 bytes for each visibility result").
+    VisibilityResultOffset {
+        /// The offset asked for.
+        offset: u64,
+        /// The visibility result buffer's length.
+        length: u64,
+    },
+    /// A visibility result mode but `Disabled` at an offset a mode of the encoder took before,
+    /// `Disabled` between them or not.
+    ///
+    /// Basis: metal-documented (Apple's page for `setVisibilityResultMode(_:offset:)`: "You can
+    /// set a specific offset value only once per render pass"; Metal's validation stops it, "using
+    /// the same offset (0) in the visibility buffer twice in the same command encoder is not
+    /// allowed", an Apple M3 Max, macOS 27.0.1, the conformance case
+    /// `visibility-counting-revisit`, where plain Metal adds the later draws to the result).
+    VisibilityResultOffsetTaken {
+        /// The offset asked for.
+        offset: u64,
+    },
+}
+
+/// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
+/// replay stream needs it, never run in a near form. Metal has no counterpart: Metal runs each.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gap {
+    /// An indirect command buffer, its execution, or a compute pipeline state for one, of what the
+    /// runtime does not build, `kind` naming it. Built: GPU-encoded indexed triangle draws with
+    /// the executing encoder's pipeline state, on a device with `VK_EXT_device_generated_commands`
+    /// (`floor::INDIRECT_COMMANDS`).
+    ///
+    /// Basis: ours (the first cut of indirect command buffers builds that alone).
+    IndirectCommandBuffers {
+        /// What is not built.
+        kind: IndirectCommandsKind,
+    },
+    /// A kernel that reads something the compute encoder does not supply yet, `kind` naming what:
+    /// an intersection-function table, a visible-function table an argument buffer holds, a
+    /// parameter the runtime does not fill, or a specialization the runtime does not set, among
+    /// others. Buffers, `setBytes` data, textures and sampler states by their resource IDs,
+    /// visible-function tables at buffer indices, constexpr samplers by their indices, an integer
+    /// write's channel widths, threadgroup memory lengths, an explicit imageblock's size, the
+    /// dispatch's grid, the stage-in region, `[[stage_in]]` attributes of a fixed layout stride
+    /// and a pinned subgroup size are supplied.
+    /// Metal's counterpart is the compute pipeline state's make
+    /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings), which
+    /// makes each.
+    ///
+    /// Basis: ours (the encoder supplies only those).
+    KernelInput {
+        /// What the kernel reads, named where the runtime found it.
+        kind: KernelInputKind,
+    },
+    /// A form of a kernel's `[[stage_in]]` that is not built, `kind` naming which: a stage-in
+    /// region the GPU reads, a layout of `MTLBufferLayoutStrideDynamic` a read attribute steps
+    /// through, or an indexed step at a step rate other than 1. Metal's counterpart is
+    /// `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`, the
+    /// `setBuffer:offset:attributeStride:atIndex:` family, and the compute pipeline state's make of
+    /// such a `stageInputDescriptor`.
+    ///
+    /// Basis: ours (no replay stream makes a compute state with a stage-input descriptor or sets a
+    /// stage-in region indirectly; what Metal reads at an indexed step's rate past 1 is not
+    /// measured).
+    StageIn {
+        /// The form, named where the runtime found it.
+        kind: StageInKind,
+    },
+    /// An imageblock length Metal answers by a rule no case measures: a compute state's
+    /// `imageblockMemoryLengthForDimensions:` where its kernel declares an imageblock (one
+    /// recording answers one extent of one kernel, which settles no rule), or its
+    /// compile kept no reflection to tell whether it declares one (a kernel that declares none
+    /// answers 0, as Metal's does); a render state's `imageblockSampleLength` and
+    /// `imageblockMemoryLengthForDimensions:` where a color format has no measured place in
+    /// Metal's record of a pixel's colors.
+    ///
+    /// Basis: ours (no case measures Metal's rule for the length).
+    ImageblockLength,
+    /// A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD
+    /// group as one subgroup of `width` threads (a pinned subgroup of 32, or the device's own
+    /// 32), where the state has no emulated-SIMD-group module to run it on: Metal runs the last
+    /// SIMD group of such a threadgroup partly filled. A kernel the consumer compiled
+    /// (`StageSource::Compiled`) keeps the variant it was compiled under, and the translator may
+    /// refuse a kernel's emulated variant (where its static threadgroup memory and one SIMD
+    /// group's scratch are past the device's). Refused at the dispatch; the state's other sizes
+    /// run. Any other failure of the variant's lowering is reported as itself
+    /// ([`Error::Translation`], or [`Gap::KernelInput`] for an input the encoder does not supply).
+    ///
+    /// Basis: ours (no emulated-SIMD-group module).
+    PartialSimdgroups {
+        /// The threadgroup size asked for.
+        threads_per_threadgroup: [u32; 3],
+        /// The threads every threadgroup must be a multiple of.
+        width: u32,
+    },
+    /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of
+    /// a kernel that observes its threadgroup partition and whose partial-threadgroups variant the
+    /// translator refused, or at a threadgroup that is not whole subgroups of a kernel whose tier
+    /// runs only whole ones: Metal runs the last threadgroup of such an axis with the threads
+    /// left. The translator refuses the variant of a kernel whose SIMD groups it emulates
+    /// (SIMD-group operations where the device's compute subgroups are neither 32 lanes nor 64 or
+    /// 128 split into 32-lane clusters, or a lockstep pair in divergent flow on a device without
+    /// `VK_KHR_shader_maximal_reconvergence`), and of one whose barriers in a loop need a vote
+    /// word its workgroup memory cannot hold. Refused at the dispatch; the state's whole grids
+    /// run. Any other failure of the variant's lowering is reported as itself
+    /// ([`Error::Translation`], or [`Gap::KernelInput`] for an input the encoder does not supply).
+    ///
+    /// Basis: ours (the translator's partial-threadgroups variant does not take the emulated
+    /// SIMD-group tier, nor a vote word past the workgroup memory).
+    PartialThreadgroups {
+        /// The grid asked for.
+        threads_per_grid: [u32; 3],
+        /// The threadgroup size asked for.
+        threads_per_threadgroup: [u32; 3],
+        /// Why the variant does not run it.
+        site: PartialThreadgroupsSite,
+    },
+    /// A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`,
+    /// a `[[stage_in]]` attribute of a thread-position step) on an encoder that never set one
+    /// ([`ComputeCommandEncoder::set_stage_in_region`](crate::ComputeCommandEncoder::set_stage_in_region)):
+    /// what such a kernel reads on Metal is not established, and is not invented.
+    ///
+    /// Basis: ours (no replay stream dispatches such a kernel without setting a region).
+    NoStageInRegion,
+    /// `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` of a
+    /// kernel whose private memory lives in the runtime's arena, past the translator's floor
+    /// (`crate::arena`): the GPU reads the counts and the runtime never does, so it can neither
+    /// size the arena for the dispatch nor split it under the arena's budget. Metal runs it.
+    /// Refused at the dispatch; the state's direct dispatches run.
+    ///
+    /// Basis: ours (no replay stream dispatches such a kernel indirectly).
+    IndirectPrivateArena,
+    /// A texture of `Memoryless` storage, which only render passes use.
+    ///
+    /// Basis: ours (render passes are not built).
+    MemorylessTexture,
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`) with a swizzle other than each channel's
+    /// own ([`Buffer::new_texture`](crate::Buffer::new_texture)), which Metal applies to its reads.
+    ///
+    /// Basis: ours (a texel buffer view has no component mapping, and a texture's resource ID
+    /// carries no swizzle to the shader; no recorded stream makes one).
+    TextureBufferSwizzle {
+        /// The texture buffer's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A texture of a pixel format the runtime makes no image of on this device for the
+    /// descriptor's usage: the device's format query lacks the format or one of the usages, or
+    /// the format's texels need a conversion in the shader that the translator's identity domains
+    /// do not make (an extended-range, bfloat, YCbCr, decoded or copies-only format, and 24-bit
+    /// depth held as 32-bit float depth).
+    ///
+    /// Basis: ours (the device's format query, or the identity domains' shaders read every
+    /// texture through its view alone).
+    TextureFormat {
+        /// The pixel format asked for.
+        pixel_format: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps) of a
+    /// texture whose image the device's blits do not filter: its format query lacks blits from
+    /// or to the image's format, or its linear filtering, or the image holds the pixel format
+    /// through a conversion (an extended-range or YCbCr format), or the texture is a view in
+    /// another format than its image's, whose blit would filter the image's.
+    ///
+    /// Basis: ours (the device's format query; the levels are the device's blit chain alone).
+    MipmapFilter {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A sampler state whose minification or magnification filter is cubic
+    /// ([`Device::new_sampler_state`](crate::Device::new_sampler_state)).
+    ///
+    /// Basis: ours (the translator's identity domains do not filter bicubically, and Vulkan's
+    /// cubic filter is not Metal's).
+    CubicSampler,
+    /// [`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy between a buffer and a
+    /// texture
+    /// ([`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer)) of a
+    /// texture whose image is no plain copy of Metal's bytes in one aspect: a format of depth and
+    /// stencil both but in a copy of a plane option
+    /// ([`BlitOption`](crate::BlitOption)), or a multisample texture. Also a plane option of a
+    /// format without the aspect it names, and a blit copy between a buffer and a texture buffer,
+    /// whose texels are its own buffer's bytes.
+    ///
+    /// Basis: ours (no copy between such an image and bytes is built, nor a texture buffer's
+    /// copy as a buffer copy; no recorded stream copies a texture buffer).
+    TextureBytes {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
+    /// that the floor's `vkCmdCopyImage` does not make: a multisample texture; one pixel format
+    /// held in two Vulkan formats, which the two textures' usages chose; a 1D texture with one of
+    /// another type; or a texture buffer, whose texels are its buffer's bytes and no image.
+    ///
+    /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a
+    /// replay stream makes one).
+    TextureCopy {
+        /// The source texture's pixel format.
+        source: PixelFormat,
+        /// The destination texture's pixel format.
+        destination: PixelFormat,
+    },
+    /// A blit copy whose source and destination share memory where no copy command orders it as
+    /// from the source before the copy, which Metal leaves undefined
+    /// ([`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture),
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) and
+    /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
+    /// and their options forms): rows of a texture in place over a buffer
+    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)) that meet the other side's rows
+    /// shifted both ways, or not shifted, along each axis, so that no cut into slabs along one
+    /// axis keeps the order (a destination row across the end of its own source row and the
+    /// start of the next; rows of two pitches that meet at their starts); or a texture placed in
+    /// a heap ([`Device::new_heap_texture`](crate::Device::new_heap_texture)), whose texels the
+    /// device lays out as it chooses, whose memory meets the other side's. Counted in
+    /// [`Metrics::overlapping_copies_refused`](crate::Metrics::overlapping_copies_refused).
+    ///
+    /// Basis: ours (no copy command reads bytes it writes, `VUID-vkCmdCopyImage-pRegions-00124`
+    /// and its twins; the first shapes are built, cut on two levels, when a replay stream or a
+    /// walk counts one).
+    OverlappingCopy {
+        /// The textures' pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
+    /// does not make: other than 2D of one level, sample and slice, or a texture buffer; of a
+    /// format of other than one color texel an element; whose first texel in the bytes shaders
+    /// reach is not a whole number of texels in, which no copy addresses; or a texture buffer whose
+    /// first texel there is not a multiple of the device's texel-buffer offset alignment for its
+    /// format, where the buffer's own place in its memory is not.
+    ///
+    /// Basis: ours (the in-place linear image and the copy form take one 2D color image, and a
+    /// texture buffer's view the texel-buffer offset alignment of Vulkan 1.3).
+    TextureOverBuffer {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A heap texture the runtime does not place
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture),
+    /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views) and
+    /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)): in a
+    /// Shared block, or an exported one, whose memory is dedicated to its buffer
+    /// (`VUID-vkBindImageMemory-memory-10926`), or one whose image the device requires an
+    /// allocation of its own for, or that does not take the Private memory type. No recorded
+    /// stream makes a Shared heap, and every optimal image measured on the lab's devices takes
+    /// the Private type.
+    ///
+    /// Basis: ours (heap textures are built for Private heaps of placeable images).
+    HeapTexture {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A surface plane in place ([`Device::new_exported_surface`](crate::Device::new_exported_surface))
+    /// whose texture's uses ask an image usage its linear tiling lacks (storage, for one): the
+    /// device's linear image does not hold that usage, as the image format query of the tiling
+    /// does not offer it or the tiling's format features lack what the optimal image has for it.
+    /// A plane whose tiling lacks sampling, rendering or either copy takes the copy form instead.
+    /// A plane of a Direct3D 11 texture's import (`Device::import_d3d11_surface`, on Windows)
+    /// whose texture's uses ask an image usage the texture's bind flags do not give, or that the
+    /// import does not offer: storage, for one, of a texture made without
+    /// `D3D11_BIND_UNORDERED_ACCESS`.
+    ///
+    /// Basis: device (the image format query and the format features of the plane's tiling).
+    SurfaceUsage {
+        /// The plane's pixel format.
+        pixel_format: PixelFormat,
+        /// The `VkImageUsageFlags` bits the tiling lacks.
+        missing: u32,
+    },
+    /// The buffer of a surface of Direct3D 11 textures ([`Surface::buffer`](crate::Surface::buffer)
+    /// of `Device::import_d3d11_surface`'s, a Windows host's). Metal's counterpart is a buffer
+    /// backed by the IOSurface whose planes the textures are over.
+    ///
+    /// Basis: ours (each plane is a Direct3D 11 texture of its own, imported into memory of its
+    /// own as an optimal image, so no one memory holds the picture's bytes for a buffer).
+    D3d11SurfaceBuffer,
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
+    /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
+    /// whose bytes no copy command in the floor addresses, though Metal takes them: an image's
+    /// offset in the `VkBuffer` shaders reach that is no multiple of a texel block's bytes (of 4
+    /// for a depth or stencil aspect: a 16-bit depth at an offset of 2), or a row stride of no
+    /// whole number of a compressed format's blocks.
+    ///
+    /// Basis: ours (Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an
+    /// aligned offset; each is built when a replay stream makes one).
+    BufferCopyAlignment {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+        /// The region's first byte in the buffer.
+        offset: u64,
+        /// The bytes from one row's start to the next's.
+        bytes_per_row: u64,
+        /// The bytes from one image's start to the next's.
+        bytes_per_image: u64,
+    },
+    /// [`BlitCommandEncoder::fill_buffer`](crate::BlitCommandEncoder::fill_buffer) of a range
+    /// that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal
+    /// fills byte by byte (probe `blit_fill_rules.m` in the conformance crate, an Apple M3 Max,
+    /// macOS 27.0.1, job m3-max-43571).
+    ///
+    /// Basis: ours (`vkCmdFillBuffer` writes whole words; a byte fill is built when a replay
+    /// stream makes one).
+    FillAlignment {
+        /// The range's first byte.
+        start: u64,
+        /// The byte after its last.
+        end: u64,
+    },
+    /// A render pipeline state of something the runtime does not build yet: what `kind` names.
+    ///
+    /// Basis: ours (the replay streams' render pipelines draw into colour, depth and stencil
+    /// attachments of one sample, with no tessellation and no framebuffer fetch; each other kind
+    /// is built when a replay stream makes one).
+    RenderPipeline {
+        /// What the pipeline asks for.
+        kind: RenderPipelineKind,
+    },
+    /// A draw or dispatch whose function declares `access::read_write` at texture slot `slot` and
+    /// reads it, where the texture bound there has a swizzle other than each channel's own (a view made
+    /// with one, [`Texture::new_texture_view_with_swizzle`](crate::Texture::new_texture_view_with_swizzle)):
+    /// such a slot reads through the texture's storage element, which maps each channel to
+    /// itself as Vulkan requires of a storage image
+    /// (VUID-VkWriteDescriptorSet-descriptorType-00336), so its `read` would answer the texel
+    /// unswizzled, where Metal reads it through the swizzle. Found when the pipeline state or a
+    /// binding changes, for the read-write slots a function reads alone
+    /// (`TextureSlot::storage` with a read). A write is not swizzled: Apple defines the swizzle
+    /// for reads and samples.
+    ///
+    /// Basis: ours (built when a replay stream counts one).
+    SwizzledReadWrite {
+        /// The function's texture slot.
+        slot: u32,
+    },
+    /// A draw or dispatch whose function writes a texture slot, or reads one through its storage
+    /// image (`access::read_write`), bound to a texture made for shader writes with no storage
+    /// element, or, at a slot declared without a format (`TextureSlot::declared_format`; a texture
+    /// atomic's is declared with one), with one the device cannot write, or for a read cannot
+    /// read, without a format. No storage element: the device does not store the texture's format
+    /// through a storage image without a format (an 8-bit sRGB format, `RGB9E5Float` or
+    /// `BGR10A2Unorm` where the device lacks its storage), or holds it through a view of another
+    /// (an `A8Unorm` held in red, an extended-range format); a view of a format the device stores,
+    /// of such a texture, has one where the device makes the texture's image extended for it
+    /// (`StorageElementCase::Unextended` where it does not). Metal writes and reads such a
+    /// texture; the runtime would drop the writes and read zeros. Not read without a format: the
+    /// storage element's format lacks `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which
+    /// a device without `shaderStorageImageReadWithoutFormat` answers per format (`BGRA8Unorm`,
+    /// `BGR10A2Unorm` and `RG11B10Float` among others on ANV before Gfx12.5): such a read is
+    /// outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and those formats
+    /// are outside Metal's read-write tiers, whose reads Metal's documentation defines. A texture
+    /// buffer has a storage element wherever shaders write it, and its answers are its format's
+    /// buffer features, of which Vulkan requires neither bit, whatever the device's features and
+    /// the format: not written without a format where they lack
+    /// `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`
+    /// (`VUID-vkCmdDispatch-OpTypeImage-07029`), not read without one where they lack the read bit
+    /// (`-07030`). The UHD Graphics 630's
+    /// Windows driver (101.2145) answers neither bit for any format, so there a texture buffer a
+    /// function writes, or reads through `access::read_write`, is refused, `R32Uint` included, but
+    /// at a slot a texture atomic updates. With no slot: a dispatch whose kernel, or a draw whose
+    /// vertex or fragment function, may reach a texture through its storage image beyond its
+    /// slots (an argument buffer's `access::write` or `access::read_write` texture, a resource
+    /// ID), in an encoder where `use_resource` declared a write of a texture with no storage
+    /// element, or with one the device cannot write without a format. A texture reached by its
+    /// resource ID with no such declaration is not found: Metal documents no write to it
+    /// (`useHeap:` declares its heap's resources read only); its writes are dropped, but a texture
+    /// buffer's that the device cannot write without a format, which are outside Vulkan's valid
+    /// usage (`VUID-vkCmdDispatch-OpTypeImage-07029`). A read there of a storage element the device cannot read without a format is not
+    /// found either (the crate's README, known gaps).
+    ///
+    /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
+    /// requires of every device, with the translator's conversion, is the form to build).
+    StorageElement {
+        /// The function's texture slot; `None` for a texture `use_resource` declared written.
+        slot: Option<u32>,
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+        /// Which it is: no storage element, none for a view of a texture the device did not make
+        /// extended for it, or one the device cannot write or read without a format.
+        case: StorageElementCase,
+        /// What holds the texture's texels.
+        backing: TextureBacking,
+    },
+    /// A dispatch or a draw whose function samples texture slot `slot` through a constexpr
+    /// sampler with Metal's bicubic filter (`filter::bicubic`), where the texture bound there is
+    /// of a pixel format whose treatment under that filter the runtime does not establish: a
+    /// format of no family Metal's bicubic filter was measured on (compressed, YUV, stencil,
+    /// integer and extended-range formats), or of 8-bit sRGB codes, whose taps the filter sums
+    /// decoded. The function reads how the filter treats the bound format's texels (its inner
+    /// taps, its clamp and its border texels) from a field the runtime writes from the bound
+    /// texture (`metal2vulkan::metal::format::bicubic_texels_word`). Found when the pipeline
+    /// state or a binding changes.
+    ///
+    /// Basis: ours (each refused format's treatment is built when a guest binds one).
+    BicubicTexels {
+        /// The function's texture slot.
+        slot: u32,
+        /// The bound texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a kind Metal makes and
+    /// the runtime does not build: what `kind` names.
+    ///
+    /// Basis: ours (the replay streams' views that compute binds are same-format views of every
+    /// slice, 2D views of one slice of a 2D array, and level subranges, swizzled or not; each
+    /// other kind is built when a replay stream binds one).
+    TextureView {
+        /// What the view changes that is not built.
+        kind: TextureViewKind,
+    },
+    /// A render pass of something the runtime does not build yet
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)):
+    /// what `kind` names.
+    ///
+    /// Basis: ours (the replay streams' passes render into one to two color attachments and a
+    /// stencil or a depth attachment, each a level of a 2D texture of one sample, with no resolve
+    /// and a clear depth of 1, none naming two textures for its depth and stencil; each other kind
+    /// is built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what
+    /// Vulkan's rendering under the floor takes no form of).
+    RenderPass {
+        /// What the pass asks for.
+        kind: RenderPassKind,
+    },
+    /// A draw or render encoder state the runtime does not build yet
+    /// ([`RenderCommandEncoder`](crate::RenderCommandEncoder)): what `kind` names.
+    ///
+    /// Basis: ours (the replay streams draw lines and triangles through one viewport Vulkan's is,
+    /// with pipeline states of their pass's formats, filled and clipped; each other kind is built
+    /// when a replay stream draws one), and device for
+    /// [`DrawKind::DividedBaseInstance`] (a device that does not report
+    /// `supportsNonZeroFirstInstance`).
+    Draw {
+        /// What the draw asks for.
+        kind: DrawKind,
+    },
+    /// A render pass over a surface plane that renders as a linear colour attachment alone, in a
+    /// shape the device does not render
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)):
+    /// what `kind` names. Such a plane is an opaque handle's plane in place
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) whose format's
+    /// `LINEAR` tiling renders only through `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`,
+    /// on a device that enabled `linearColorAttachment` (`VK_NV_linear_color_attachment`). A pass
+    /// whose colour attachments are all such planes, with no depth or stencil attachment and no
+    /// resolve into one, renders. Metal's counterpart is a render pass over a texture of an
+    /// IOSurface's plane.
+    ///
+    /// Basis: device (VK_NV_linear_color_attachment renders such a format as a colour attachment
+    /// only "as long as all the color attachments in the render pass instance have
+    /// VK_IMAGE_TILING_LINEAR tiling"; the RTX 3090's driver lost the device rendering a linear
+    /// colour attachment beside a depth or stencil attachment).
+    LinearPlanePass {
+        /// What the pass sets beside the plane, or into it.
+        kind: LinearPlanePassKind,
+    },
+    /// A pipeline the device does not make for its heaviest stage's weight, for what `cause`
+    /// names: a kernel whose module weighs more than the compiled stage bound
+    /// (`metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT`, 39,014), which this process never
+    /// compiles, its `VkPipeline` made from its helper's cache data alone
+    /// ([`Device::fill_stage`](crate::Device::fill_stage)), or a render pipeline with a stage that
+    /// weighs more than 99,109, the render stages' own bound, as no helper compiles a render stage.
+    /// Metal's counterpart is the pipeline state's make, which Metal's compiler service compiles.
+    ///
+    /// Basis: device (on the Iris Xe of RPL-P, ANV, Mesa 26.2.6, the consumer's helper compiles of
+    /// entry weights 186,065 to 424,132 passed its 3 GiB cap, job m3-max-65807; a driver whose
+    /// helper's compile met its cap or time, or that keeps no pipeline cache data, gives no data to
+    /// make the pipeline from).
+    StageSize {
+        /// The heaviest stage's entry weight (`ModuleStats::entry_weight`).
+        weight: u64,
+        /// Why it is not made.
+        cause: StageGap,
+    },
+}
+
+/// Why a pipeline past the stage bound is not made ([`Gap::StageSize`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StageGap {
+    /// The kernel's entry holds a breach: what ended its helper's compile, or the driver's
+    /// compile-required answer to the helper's cache data
+    /// ([`Device::record_stage_breach`](crate::Device::record_stage_breach)). Kept until the
+    /// driver's version changes; a memory breach, until a device is given a higher
+    /// [`DeviceOptions::stage_memory_ceiling`](crate::DeviceOptions::stage_memory_ceiling); a
+    /// helper's own end before its reply ([`StageBreach::Ended`](crate::StageBreach::Ended)),
+    /// until the runtime's helper code changes.
+    Breach(crate::StageBreach),
+    /// The device has no cache directory
+    /// ([`DeviceOptions::pipeline_cache_dir`](crate::DeviceOptions::pipeline_cache_dir)) to keep a
+    /// helper's cache data in.
+    NoCacheDirectory,
+    /// The device's driver writes no pipeline cache header, so its cache data holds no compile
+    /// another process can hand it: lavapipe's (an empty cache's data is 20 bytes in Mesa 26.2.4).
+    NoPipelineCache,
+    /// A render pipeline's vertex or fragment stage past the render stages' bound, 99,109: no
+    /// helper compiles render stages.
+    RenderStage,
+}
+
+/// What a render pass sets beside a surface plane that renders as a linear colour attachment
+/// alone, or into it, that the device does not render ([`Gap::LinearPlanePass`]). Metal's
+/// counterpart is the render pass descriptor's other attachments beside a texture of an
+/// IOSurface's plane.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LinearPlanePassKind {
+    /// A colour attachment that is not such a plane: an image of the runtime's own, or a plane
+    /// whose tiling renders through the colour attachment feature itself. Vulkan's rule: such a
+    /// format renders as a colour attachment only where every colour attachment of the pass is a
+    /// `LINEAR` image of a format with that feature.
+    OtherColor,
+    /// A depth or stencil attachment. Not Vulkan's rule but the driver's fault: on an RTX 3090
+    /// the driver lost the device rendering a linear colour attachment beside one, and the
+    /// runtime recovers from no device loss, so the shape is not used.
+    DepthStencil,
+    /// A multisample colour attachment's resolve into such a plane: a resolve attachment of the
+    /// pass is held to the rule as its colour attachments are, and the multisample attachment is
+    /// never `LINEAR`.
+    Resolve,
+}
+
+/// What of an indirect command buffer the runtime does not build ([`Gap::IndirectCommandBuffers`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IndirectCommandsKind {
+    /// Any indirect command buffer, on a device without `VK_EXT_device_generated_commands` and
+    /// `VK_KHR_maintenance5` with their features (`floor::INDIRECT_COMMANDS`): an Intel Iris Xe,
+    /// the UHD 630 on Windows, and Mesa's Mac Vulkan driver among the venues.
+    Extension,
+    /// Command types other than indexed draws alone (`MTLIndirectCommandTypeDrawIndexed`): plain,
+    /// patch or mesh draws, or dispatches, which take other command layouts.
+    CommandTypes,
+    /// Commands that set their own pipeline state (`inheritPipelineState` false), which Vulkan
+    /// draws through an indirect execution set: a set of graphics pipelines is offered on none of
+    /// the AMD cards, and its pipelines must share every state.
+    CommandPipelines,
+    /// Commands that draw with the executing encoder's buffers (`inheritBuffers` true).
+    InheritedBuffers,
+    /// More than 31 vertex or fragment buffers a command binds (`maxVertexBufferBindCount` or
+    /// `maxFragmentBufferBindCount`).
+    BindCount,
+    /// A command count of 0, or past the device's most commands of one execution
+    /// (`maxIndirectSequenceCount`).
+    Capacity,
+    /// A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`):
+    /// compute commands are not built.
+    ComputeCommands,
+    /// An execution with a pipeline state made without `supportIndirectCommandBuffers`, whose
+    /// vertex function does not skip the commands outside the range.
+    UnflaggedState,
+    /// An execution whose pipeline state's buffer slots need more tokens than the device takes in
+    /// one command (`maxIndirectCommandsTokenCount`): one per buffer slot of the command its
+    /// functions read, the sequence index, the index buffer and the draw.
+    Tokens,
+    /// An execution whose pipeline state reads what a command cannot carry: a buffer slot the
+    /// command binds placed outside the push constants (in a parameter block), a fixed-function
+    /// vertex binding, or a draw that must be at base instance 0.
+    DrawInput,
+}
+
+/// What a render pipeline state asks that the runtime does not build ([`Gap::RenderPipeline`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RenderPipelineKind {
+    /// A depth attachment format and a stencil attachment format that differ
+    /// (`depthAttachmentPixelFormat` and `stencilAttachmentPixelFormat`, as of separate depth and
+    /// stencil textures): Vulkan's pipeline takes one format for both
+    /// (VUID-VkGraphicsPipelineCreateInfo-renderPass-06589), as its rendering takes one view for
+    /// both ([`RenderPassKind::DepthStencilViews`]).
+    DepthStencilFormats,
+    /// A `rasterSampleCount` that is not a power of two from 1 to 64: Vulkan's rasterization
+    /// takes one of its sample count bits (`VkSampleCountFlagBits`).
+    SampleCount,
+    /// Vertex amplification (`maxVertexAmplificationCount` above 1).
+    VertexAmplification,
+    /// A post-tessellation vertex function's tessellation state that the runtime does not build:
+    /// a per-instance factor step function (`MTLTessellationFactorStepFunctionPerInstance` or
+    /// `PerPatchAndPerInstance`) or an enabled factor scale (`tessellationFactorScaleEnabled`),
+    /// which no replay stream's states use. The translator refuses a control-point index type
+    /// (`tessellationControlPointIndexType`) itself. A descriptor's tessellation state with a vertex
+    /// function that is not post-tessellation is ignored, as Metal ignores it.
+    Tessellation,
+    /// Stages the translator synthesizes beside the functions' but a tessellation's: lines drawn as
+    /// bands of triangles.
+    SynthesizedStages,
+    /// A specialization the draw would set, beside the sample and amplification counts.
+    Specialization,
+    /// Dynamic state the translator asks for beyond what Vulkan 1.3 leaves dynamic.
+    DynamicState,
+    /// A Vulkan feature or extension the translator's pipeline needs (its `Requirements`) that
+    /// device creation does not enable.
+    DeviceFeature,
+    /// A function that reads what a draw does not supply yet: a function table, a table the
+    /// binder builds, a parameter block longer than a parameter ring chunk (64 KiB), a push field
+    /// or bind-time fact the render encoder does not fill, or an unnormalized constexpr sampler.
+    /// Among the push fields: the stride of a vertex buffer layout of
+    /// `MTLBufferLayoutStrideDynamic` that the vertex function fetches in the shader, as a state
+    /// made for indirect command buffers (`supportIndirectCommandBuffers`) fetches every
+    /// `[[stage_in]]` attribute.
+    DrawInput,
+}
+
+/// What a kernel reads that the compute encoder does not supply yet ([`Gap::KernelInput`]),
+/// named where the runtime finds it in the translator's compute pipeline. Metal supplies each:
+/// every variant names its Metal counterpart.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KernelInputKind {
+    /// A buffer the kernel reaches through the translator's root table of addresses
+    /// (`PipelineInterface::needs_pointer_translation`), which the runtime does not build: it
+    /// pushes each buffer's own device address. Metal's counterpart is a device pointer the
+    /// kernel reads, which Metal reaches at its `gpuAddress`.
+    PointerTranslation,
+    /// A texture or sampler the kernel resolves through the translator's handle table
+    /// (`PipelineInterface::needs_handle_translation`), which the runtime does not build: it
+    /// pushes each one's resource ID. Metal's counterpart is a texture or sampler the kernel
+    /// reads, which Metal resolves by its `gpuResourceID`.
+    HandleTranslation,
+    /// A descriptor set of the pipeline's layout that is not the device's: a binding of set 1
+    /// that is not one of the device's texture and sampler arrays, or a binding of another set.
+    /// Metal has no counterpart: it binds every argument by its index.
+    DescriptorSet,
+    /// Shader stage flags other than full and varying subgroups
+    /// (`VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT` and
+    /// `VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT`). Metal has no
+    /// counterpart: it states no subgroup control.
+    StageFlags,
+    /// A fact of the module the encoder does not supply: a `RuntimeFact` the runtime does not
+    /// name, such as a resource's presence or a sampler's coordinates, or an address alignment of
+    /// a slot that is not a kernel's buffer or that is not a power of two, at the state's make.
+    /// Metal's counterpart is the dispatch's state the fact stands for: the bound resource's own
+    /// state.
+    RuntimeFact {
+        /// The fact's name (`RuntimeFact::name`), such as `"ResourcePresence"`.
+        fact: &'static str,
+    },
+    /// An argument slot the encoder does not bind: an intersection function table at a buffer
+    /// index, or a slot of another class or stage. Metal's counterpart is
+    /// `setIntersectionFunctionTable:atBufferIndex:`.
+    Slot,
+    /// A pushed parameter the encoder does not fill: a `PushField` or a placement the runtime
+    /// does not name, or one of another stage. Metal's counterpart is the dispatch's state the
+    /// parameter stands for.
+    PushField,
+    /// A `constexpr sampler` the state does not hold: one of unnormalized coordinates
+    /// (`coord::pixel`), one Metal's numbering of the kernel's samplers does not list, or one a
+    /// variant of the kernel samples that its module does not. Metal's counterpart is the
+    /// sampler the kernel's source declares.
+    ConstexprSampler,
+    /// Arguments whose parameter block is past one chunk of the runtime's ring, or that have no
+    /// address for it. Metal's counterpart is the kernel's arguments, which Metal binds however
+    /// many there are.
+    ArgumentBlock,
+    /// Arguments whose pushed words are past the device's push window
+    /// (`DeviceProfile::push_window`, its `maxPushConstantsSize` up to 256 bytes). Metal's
+    /// counterpart is the kernel's arguments, which Metal binds however many there are.
+    PushBytes,
+    /// A specialization constant the runtime does not set: a sampler state's fields, a constant
+    /// that is not 4 bytes, the threadgroup memory length of an argument the kernel does not take,
+    /// or a kernel's threadgroup memory lengths past the 31 indices
+    /// `setThreadgroupMemoryLength:atIndex:` sets. Metal's counterpart is the state the constant
+    /// stands for: a sampler state's descriptor, or `setThreadgroupMemoryLength:atIndex:`.
+    Specialization,
+    /// A workgroup the module fixes in a shape the runtime does not run: a subgroup multiple
+    /// outside a flattened local size (a compute-derivative group), or a module that neither
+    /// flattens its threadgroup nor runs a deep one as one row. Metal's counterpart is the
+    /// dispatch's threadgroup size, which Metal runs in any shape within its limits.
+    Workgroup,
+    /// An entry point whose name holds a NUL byte, which names no Vulkan entry point. Metal's
+    /// counterpart is the function's name.
+    EntryPoint,
+}
+
+/// The form of a kernel's `[[stage_in]]` the runtime does not build ([`Gap::StageIn`]). Every
+/// variant names its Metal counterpart.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StageInKind {
+    /// A stage-in region the GPU reads from a buffer, in `MTLStageInRegionIndirectArguments`'
+    /// layout
+    /// ([`ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer`](crate::ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer)).
+    /// Metal's counterpart is `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`.
+    IndirectRegion,
+    /// An attribute the kernel reads through a layout of `MTLBufferLayoutStrideDynamic` that
+    /// steps by thread position, whose stride the encoder would bind with the buffer. Metal's
+    /// counterpart is the `setBuffer:offset:attributeStride:atIndex:` family, which the compute
+    /// encoder does not have.
+    DynamicStride,
+    /// An attribute the kernel reads through a layout of an indexed step
+    /// (`MTLStepFunctionThreadPositionInGridXIndexed` or `...YIndexed`) at a step rate past 1, whose
+    /// Metal answer is not measured. Metal's counterpart is the compute pipeline state's make of
+    /// that `stageInputDescriptor`.
+    IndexedStepRate,
+}
+
+/// What a draw asks that the runtime does not build ([`Gap::Draw`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DrawKind {
+    /// The triangle fill mode `Lines` (`setTriangleFillMode:`) on a device without
+    /// `fillModeNonSolid`, which a pipeline's `polygonMode` `LINE` needs, and the mode of raw value
+    /// 2, which no SDK header declares and no replay stream sets.
+    FillMode,
+    /// A draw of lines or a line strip while the encoder's line width (Apple's `setLineWidth:`
+    /// SPI, [`RenderCommandEncoder::set_line_width`](crate::RenderCommandEncoder::set_line_width))
+    /// is not 1: Metal draws such a line as a parallelogram that width wide; the runtime draws
+    /// lines at width 1 alone, as Vulkan's wider lines are a device feature (`wideLines`) the
+    /// floor does not require.
+    LineWidth,
+    /// No viewport or scissor rectangle, or more than Metal's 16 (`setViewports:count:`,
+    /// `setScissorRects:count:`), which Metal's validation stops.
+    Viewports,
+    /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
+    /// `[0, 1]`, or bounds past the device's viewport limits.
+    Viewport,
+    /// A pipeline state whose colour or stencil formats are not its pass's attachments', or
+    /// whose `rasterSampleCount` is not their sample count: Metal's validation stops most such
+    /// draws, and plain Metal zeroes or drops the colours. Vulkan draws no other count
+    /// (VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285).
+    AttachmentFormats,
+    /// A draw that binds a texture whose image the pass renders, where neither the attachment
+    /// feedback loop nor a copy into the image's shadow reads it: on a device without the
+    /// attachment reads (`floor::Capabilities::attachment_reads`), from the vertex function at the
+    /// rendered level and layer, written, of a depth or stencil attachment, of an image over a
+    /// buffer in place or whose format the device takes neither the feedback usage nor a shadow
+    /// for, or of an image two attachments of the pass render; and through a shadow, which holds
+    /// one layer, an attachment of a layered pass or a 3D texture's depth plane.
+    /// Metal reads a render target through a texture.
+    AttachmentRead,
+    /// A draw through a pipeline state whose fragment function reads a colour attachment
+    /// (`[[color(n)]]`, framebuffer fetch) whose texture the draw cannot read it through: one that
+    /// is no 2D texture (a 2D multisample texture in a multisampled pass) whose first level and
+    /// slice the pass renders, that no shader reaches (made with no index), whose image another
+    /// attachment of the pass shares (two planes of one surface), or that the device reads no
+    /// attachment through, as `AttachmentRead` says, a drawable's texture among them. Metal
+    /// reads the attachment at the fragment's pixel.
+    FetchedAttachment,
+    /// A draw at a base instance other than 0 through a pipeline state that steps a vertex layout
+    /// per instance at a rate above 1, on a device that does not report
+    /// `supportsNonZeroFirstInstance`: Vulkan's divisor takes `firstInstance` 0 alone there
+    /// (VUID-vkCmdDraw-pNext-09461). Metal counts the step from any base instance. The same
+    /// draw from base instance 0 runs; an indirect draw through such a state, whose base instance
+    /// the GPU reads, is refused alike.
+    DividedBaseInstance,
+    /// A draw of patches through a patch index buffer (`drawPatches:`'s `patchIndexBuffer`), which
+    /// no replay stream's patch draws name: the control stage takes each patch's index from its
+    /// position.
+    PatchIndexBuffer,
+    /// A command that ends the pass's rendering to record between, while a `Boolean` or
+    /// `Counting` visibility result's query counts the draws (from the first draw after its
+    /// `setVisibilityResultMode:offset:` to the next mode set): a memory barrier after draws that
+    /// wrote memory, a draw that moves an attachment to the feedback layout, pays a barrier owed
+    /// before an attachment read or copies what it reads into an attachment's shadow, and a draw
+    /// that binds or declares a texture over a buffer in an image of its own, that draws while
+    /// such a texture the segment used has its image ahead of its buffer, or that reaches a Managed
+    /// buffer with textures over its device copy, whether or not it owes a copy. Vulkan's query
+    /// begins and ends inside one render pass instance, and a query's count carried across one
+    /// into the next is not built. Counted in
+    /// [`Metrics::visibility_interrupts_refused`](crate::Metrics::visibility_interrupts_refused).
+    VisibilityResultInterrupt,
+    /// A `Boolean` or `Counting` visibility result mode in a pass whose `visibilityResultType` is
+    /// `Accumulate`, which takes each result into the word at its offset: adding a result to a
+    /// word is not built. Counted in
+    /// [`Metrics::accumulated_visibility_refused`](crate::Metrics::accumulated_visibility_refused).
+    AccumulatedVisibilityResults,
+}
+
+/// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RenderPassKind {
+    /// A depth attachment and a stencil attachment that are not one texture's same level and
+    /// slice: Vulkan's rendering takes one image view for both
+    /// (VUID-VkRenderingInfo-pDepthAttachment-06085).
+    DepthStencilViews,
+    /// A `Clear` load of a depth attachment whose `clearDepth` lies outside `[0, 1]`, or is NaN:
+    /// Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`
+    /// (VUID-VkClearDepthStencilValue-depth-00022), which the floor does not require.
+    ClearDepth,
+    /// Attachments of two sample counts: Vulkan renders one count into every attachment of a
+    /// pass (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
+    SampleCounts,
+    /// A resolve the runtime does not build: into a resolve texture of another pixel format than
+    /// its attachment's (the format's sRGB twin among them), of more than one sample, or whose
+    /// level is not the attachment level's width and height; of an attachment of one sample; of
+    /// an extended-range, bfloat or YCbCr color attachment, whose image Vulkan's average would
+    /// read in its own encoding; or of a depth and a stencil attachment into two views
+    /// (VUID-VkRenderingInfo-pDepthAttachment-06086).
+    Resolve,
+    /// A resolve into a texture made without `RenderTarget` usage (and not of Metal's unknown
+    /// usage) whose image has no attachment usage and that has no resolve image: a depth or
+    /// stencil texture; a colour texture of a type but 2D, a 2D array, a cube or a cube array, or
+    /// whose format the device's optimal image does not render, by its format features or its
+    /// image format query at the texture's extent; a texture in place over a dma-buf's import (an
+    /// imported surface's memory, whose bytes reach its image through the import's acquire); and
+    /// a view of another pixel format of a texture in place over a buffer whose linear image takes
+    /// no attachment usage (a view of its own format resolves as the texture does; where the linear
+    /// image takes the usage, a view resolves in place). A texture in place over a buffer of the
+    /// runtime's own memory whose linear image takes none (of a format the device's linear tiling
+    /// does not render, by its linear features or its image format query at the texture's extent,
+    /// measured on the RTX 3090 and KosmicKrisp for every format; or whose subresource reaches
+    /// past its own rows or its buffer, as a resolve "may read and write back any memory locations
+    /// within the image subresource bound for that attachment", Vulkan's multisample resolve
+    /// operations) stays in place and is resolved into: the pass resolves into the texture's
+    /// resolve image, a one-sample optimal image of its plan made at the first such pass and
+    /// freed with it, and its end copies the render area into the buffer's bytes at the texture's
+    /// pitch, the bytes past each row's texels untouched (`Metrics::resolve_copies`, a copy Metal
+    /// does not make).
+    /// Metal resolves into a texture of any usage: probe `resolve_texture_usage.m` in the
+    /// conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-59768) resolved a 4-sample
+    /// `BGRA8Unorm_sRGB` attachment into a texture of `ShaderRead` usage and of `ShaderRead |
+    /// ShaderWrite` usage, plain and under Metal's validation layer, each reading the texels of a
+    /// `RenderTarget` one; and (job m3-max-66994) a 600 x 600 pass that loads its colour, depth
+    /// and stencil into a `ShaderRead` texture over a Shared buffer, its rows 2,400 and 2,560
+    /// bytes apart, whose buffer then read the resolved texels and kept every byte past them.
+    /// Vulkan resolves only into a view with the attachment usage
+    /// (VUID-VkRenderingInfo-colorAttachmentCount-09476), so every one-sample colour texture of an
+    /// optimal image, 2D, a 2D array, a cube or a cube array, takes that usage on every device
+    /// where its format renders, whatever Metal's usage. It grows memory on RADV: of optimal
+    /// `RGBA8Unorm`, `BGRA8Unorm_sRGB`, `RGBA16Float`, `R32Float` and `RG11B10Float` images of 256
+    /// x 256 and 1920 x 1080, one level and a full chain, with `ShaderRead` and `ShaderRead |
+    /// ShaderWrite` usage, adding the attachment usage grows the size of 18 of 36 on the Radeon
+    /// 780M (every 1920 x 1080 one; `RGBA8Unorm` of one level from 8,847,360 to 8,896,512 bytes,
+    /// 1.0056 times) and 14 of 36 on the RX 550 (8,847,360 to 8,882,200), alignments equal, and
+    /// none on the Iris Xe, the RTX 3090, llvmpipe or KosmicKrisp (jobs m3-max-59774, m3-max-59775
+    /// and m3-max-59776). A texture's linear image in place over a buffer of the runtime's own
+    /// memory takes it too, where the device's linear tiling renders its format and its query
+    /// makes the image with it: of each colour format a texture over a buffer is made of, at 600 x
+    /// 600 and 1920 x 1080, of `ShaderRead` and `ShaderRead | ShaderWrite` usage, adding the
+    /// attachment usage changed no linear image's row pitch, offset, size, alignment or memory
+    /// types on the Radeon 780M, the RX 550, the RX 7900 XTX, the Iris Xe, the RTX 3090 (where
+    /// its query makes the image) and llvmpipe, so no texture leaves its place for it; the linear
+    /// tiling features of the RTX 3090 and of KosmicKrisp hold the attachment for none of them, so
+    /// there no such texture takes it (jobs m3-max-67028, m3-max-67035, m3-max-67029,
+    /// m3-max-67030, m3-max-67031, m3-max-67021 and m3-max-67032). No depth format was measured,
+    /// so a depth or stencil texture takes no attachment usage for a resolve alone.
+    ResolveUsage,
+    /// A depth or stencil resolve the device's resolve modes do not offer
+    /// (`VkPhysicalDeviceDepthStencilResolveProperties`): a depth attachment's `Min` or `Max`
+    /// filter where `supportedDepthResolveModes` lacks its mode; the stencil filter
+    /// `DepthResolvedSample`, the stencil of the sample the depth resolve keeps, which no Vulkan
+    /// resolve mode is; or the two aspects of one depth-stencil attachment resolving where the
+    /// device pairs no such resolves (`independentResolveNone` for one aspect alone,
+    /// `independentResolve` for two modes; VUID-VkRenderingInfo-pDepthAttachment-06104 and
+    /// -06105).
+    ResolveFilter,
+    /// A store action an encoder sets that does not resolve (`setColorStoreAction:atIndex:` and
+    /// its depth and stencil siblings), for an attachment whose pass left its store action
+    /// `Unknown` with a resolve texture: the rendering began resolving into the texture, as Vulkan
+    /// fixes the resolve as the rendering begins.
+    LateStore,
+    /// An attachment that is neither a level of a 2D texture, a 2D array, a cube, a cube array or a
+    /// 2D multisample texture or array, nor a depth plane of a 3D texture's level that a color
+    /// attachment renders in a pass of one layer: a 1D texture's; a 3D texture's in a layered pass
+    /// (`renderTargetArrayLength` 2 or more), as a depth or stencil attachment, or as a resolve
+    /// texture; and a resolve's depth plane but 0.
+    TextureType,
+    /// `MTLStoreActionCustomSampleDepthStore`, set on the pass or by the encoder's
+    /// `setColorStoreAction:atIndex:` family.
+    StoreAction,
+    /// A `Clear` load action on an attachment whose format the runtime clears only through a
+    /// shader: an extended-range, bfloat or YCbCr format.
+    ClearFormat,
+    /// A pass with no attachment wider or taller than the device's `maxFramebufferWidth` or
+    /// `maxFramebufferHeight`: Vulkan's rendering covers at most that
+    /// (VUID-VkRenderingInfo-pNext-07815 and -07816). Every venue dumped reports 16384 or more,
+    /// Metal's largest side (jobs m3-max-48727 to 48731, 48736, 48737 and 61508).
+    NoAttachment,
+    /// A `renderTargetArrayLength` past the device's `maxFramebufferLayers`: Vulkan's rendering
+    /// renders at most that many layers (VUID-VkRenderingInfo-layerCount-07817), and requires 256
+    /// of it, where Metal's arrays hold 2048 slices.
+    ArrayLength,
+}
+
+/// What a texture view changes that the runtime does not build ([`Gap::TextureView`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextureViewKind {
+    /// Another pixel format Metal takes that the texture's image does not list: the device holds
+    /// it in no viewed form of the image format's compatibility class.
+    PixelFormat,
+    /// Another pixel format Metal takes that a surface plane's image does not list: in place
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), the device's
+    /// linear image does not sample that format or its export does not take the list; over a
+    /// Direct3D 11 texture (`Device::import_d3d11_surface`, on Windows), the image lists only its
+    /// own format, the plane's texture's and that one's sRGB sibling, as Direct3D 11 made the
+    /// texture in one format.
+    SurfacePixelFormat,
+    /// Another texture type than the casts built
+    /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).
+    TextureType,
+    /// A cube view of a 2D array whose image is not cube-compatible, one of Metal's casts: Vulkan
+    /// views an image as a cube only where the image was made cube-compatible, which a square 2D
+    /// array of six slices or more is where the device's image format query takes the flag for
+    /// its format and usage. A non-square array's image is not
+    /// (`VUID-VkImageCreateInfo-flags-08865`).
+    CubeOfArray,
+    /// Some of the slices of a texture that is not a 1D or 2D array: a 2D multisample array's.
+    Slices,
+    /// A view of a texture buffer: its texels are its buffer's bytes, read through a buffer view
+    /// that takes no other format, type or swizzle.
+    TextureBuffer,
+}
+
+/// Why an observing kernel's partial-threadgroups variant does not run a grid that ends in
+/// partial threadgroups ([`Gap::PartialThreadgroups`]). Metal has no counterpart: Metal runs every
+/// partial threadgroup.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PartialThreadgroupsSite {
+    /// The translator refused the variant: its predicated walk, which barriers in a loop make
+    /// vote, takes a 4-byte vote word of threadgroup memory beside the kernel's own, and the two
+    /// pass the device's `maxComputeSharedMemorySize`.
+    VoteWord {
+        /// The kernel's own threadgroup memory, in bytes: the state's
+        /// `staticThreadgroupMemoryLength`.
+        static_length: u32,
+        /// The device's `maxComputeSharedMemorySize`, which the kernel's memory and the word were
+        /// held against.
+        max: u32,
+    },
+    /// The translator refused the variant for another of the kernel's structures: SIMD groups it
+    /// emulates, compute derivatives, an imageblock slice write every invocation shares, or
+    /// another refusal of the variant's lowering or compile.
+    Translator,
+    /// The threadgroup is not whole SIMD groups of the variant, whose tier runs only whole ones.
+    SimdGroups {
+        /// The threads every threadgroup must be a multiple of.
+        width: u32,
+    },
+}
+
+/// Which storage element a function's storage use of a texture lacks
+/// ([`Gap::StorageElement`]). Metal has no counterpart: Metal writes and reads such a texture.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StorageElementCase {
+    /// The texture, made for shader writes, has no storage element on this device: its format
+    /// has no storage image here, or the runtime holds it through a view of another format.
+    Absent,
+    /// A view, of a format the device stores, of a texture made for shader writes whose own format
+    /// it does not store, has no storage element: the device's image format query does not make
+    /// the texture's image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` and the storage usage for its
+    /// views of another format beside every other usage it makes it with (the optimal image's
+    /// query, or, in place over a buffer, the linear image's).
+    Unextended,
+    /// A texture buffer whose format's buffer features lack
+    /// `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`, which a function writes without a
+    /// format.
+    WriteWithoutFormat,
+    /// A texture whose storage element's format lacks
+    /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a function reads as storage
+    /// without a format (`access::read_write`).
+    ReadWithoutFormat,
+}
+
+/// What holds a texture's texels ([`Gap::StorageElement`]). Metal's counterpart is what the
+/// texture's `buffer` and `iosurface` answer.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextureBacking {
+    /// Memory of its own or a heap's ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_heap_texture`](crate::Device::new_heap_texture)), or a view of such a
+    /// texture.
+    Texture,
+    /// A buffer's bytes ([`Buffer::new_texture`](crate::Buffer::new_texture)): a texture buffer,
+    /// or a texture over the buffer.
+    Buffer,
+    /// A plane of an exported surface
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)).
+    SurfacePlane,
+    /// A plane of a Direct3D 11 texture's import (`Device::import_d3d11_surface`, on Windows).
+    D3d11,
+    /// The consumer's swapchain image
+    /// ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture)).
+    Drawable,
+}
+
+/// A limit a call ran into, with what it was asked.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    /// A block longer than one allocation and one buffer hold on the device
+    /// ([`Device::take_block`](crate::Device::take_block) past `maxMemoryAllocationSize` or
+    /// `maxBufferSize`). Metal's counterpart is `maxBufferLength`, past which it answers nil.
+    ///
+    /// Basis: device (the device's `maxMemoryAllocationSize` and `maxBufferSize`).
+    BlockLen {
+        /// The length asked for, rounded up to the allocation granule.
+        len: u64,
+        /// The most the device holds in one block.
+        max: u64,
+    },
+    /// A block after every block number has been used
+    /// ([`Device::take_block`](crate::Device::take_block)): numbers are never reused during a
+    /// device's life. Metal has no counterpart.
+    ///
+    /// Basis: ours (block numbers are 32 bits).
+    BlockIds,
+    /// A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up
+    /// to 16 bytes), is past the device's `maxComputeSharedMemorySize`; for a threadgroup that
+    /// runs the emulated-SIMD-group module, with the scratch of its SIMD groups. Metal's
+    /// counterpart is `maxThreadgroupMemoryLength`, past which its validation stops the dispatch.
+    ///
+    /// Basis: device (the device's `maxComputeSharedMemorySize`).
+    ThreadgroupMemory {
+        /// The threadgroup memory the dispatch takes, in bytes: `static_length`, the lengths set,
+        /// and what the runtime adds beside them (a predicated walk's 4-byte vote word, an
+        /// emulated SIMD group's scratch).
+        length: u64,
+        /// The device's most.
+        max: u32,
+        /// The kernel's own threadgroup memory, in bytes: the state's
+        /// `staticThreadgroupMemoryLength`.
+        static_length: u32,
+    },
+    /// A dispatch whose threadgroup is within Metal's `maxTotalThreadsPerThreadgroup` for the
+    /// kernel and past the state's on this device: the state answers the least of Metal's and
+    /// the device's limits for the kernel (`maxComputeWorkGroupSize`, its subgroups' count, and
+    /// for emulated SIMD groups their scratch beside `maxComputeSharedMemorySize`). Metal runs
+    /// the threadgroup; a threadgroup past Metal's own answer is [`Refusal::ThreadgroupSize`].
+    ///
+    /// Basis: device (the device's compute work-group and shared-memory limits).
+    ThreadgroupThreads {
+        /// The threadgroup size asked for.
+        size: [u32; 3],
+        /// The state's `maxTotalThreadsPerThreadgroup` on this device.
+        max: u32,
+    },
+    /// `setBytes` data longer than one parameter ring chunk. Metal documents the call for data
+    /// under 4 KB.
+    ///
+    /// Basis: ours (a ring chunk is 64 KiB).
+    BytesLength {
+        /// The length asked for.
+        len: u64,
+        /// The most one call takes.
+        max: u64,
+    },
+    /// A grant of no indices, or one past its class's range
+    /// ([`Device::grant_indices`](crate::Device::grant_indices), [`IndexClass::range`]). Metal
+    /// has no counterpart.
+    ///
+    /// Basis: ours (the descriptor arrays are 65,536 sampled and 65,536 storage textures, one
+    /// index of both a texture's, and 4,000 samplers of each use, and index 0 is nil).
+    IndexRange {
+        /// The class asked for.
+        class: IndexClass,
+        /// The first index asked for.
+        first: u32,
+        /// How many indices.
+        count: u32,
+    },
+    /// A texture whose extent or array layers are past what the device makes of its format,
+    /// type, usage and sample count. A cube's layers are six a cube. A texture buffer's width past
+    /// the device's texel buffer elements, its extent `[width, 1, 1]` in 1 layer.
+    ///
+    /// Basis: device (the image format query's `maxExtent` and `maxArrayLayers`, and
+    /// `maxTexelBufferElements`).
+    TextureSize {
+        /// The extent asked for.
+        extent: [u32; 3],
+        /// The array layers asked for.
+        layers: u32,
+        /// The device's most.
+        max_extent: [u32; 3],
+        /// The device's most layers.
+        max_layers: u32,
+    },
+    /// A sampler state whose device samplers would take the device past its
+    /// `maxSamplerAllocationCount`, less the sampler arrays' two defaults
+    /// ([`Device::new_sampler_state`](crate::Device::new_sampler_state)). Equal create infos share
+    /// one sampler, so it bounds distinct samplers, not sampler states.
+    ///
+    /// Basis: device (the device's `maxSamplerAllocationCount`).
+    DeviceSamplers {
+        /// The most samplers the device's states hold.
+        max: u32,
+    },
+    /// A sampler state bound with LOD clamps of its own past the variants the runtime holds at
+    /// once: each such bind's clamps are a variant of the state, at a variant element of set 1's
+    /// sampler arrays, and every one of them is held, by a state or by work not yet retired
+    /// ([`ComputeCommandEncoder::set_sampler_state_with_lod_clamps`](crate::ComputeCommandEncoder::set_sampler_state_with_lod_clamps)
+    /// and the render encoder's vertex and fragment forms). Nothing is bound.
+    ///
+    /// Basis: ours (the runtime's 4,000 variant elements).
+    LodClampVariants {
+        /// The most variants live at once.
+        max: u32,
+    },
+    /// A dispatch or a draw that binds a texture of more than one level to a slot its function
+    /// writes or reads at a level other than the constant 0 (MSL `write(color, coord, lod)` at a
+    /// level the function computes), where no run of set 1's level elements holds the texture's
+    /// levels: each such texture holds one run of 16, a single-level storage view of each of its
+    /// levels, from its first such bind until it is released and its work retired, and every run
+    /// is held; or the texture has more than 16 levels, past any texture Metal makes (16,384
+    /// texels a side, 15 levels). Nothing is recorded.
+    ///
+    /// Basis: ours (the runtime's 65,536 level elements, 4,096 runs of 16).
+    LevelElements {
+        /// The most textures that hold runs at once.
+        max: u32,
+    },
+    /// A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones,
+    /// refused before the driver is called: each block, each imported block, each texture's own
+    /// memory, each staging buffer of [`Texture::replace_region`](crate::Texture::replace_region)
+    /// and [`Texture::get_bytes`](crate::Texture::get_bytes), the parameter ring's blocks and the
+    /// zero source count one while they live ([`Gauges::blocks`](crate::Gauges::blocks)). Vulkan
+    /// leaves an allocation past the count undefined, so the runtime counts its own. Metal has no
+    /// counterpart: its allocations are bounded by memory alone.
+    ///
+    /// Basis: device (the device's `maxMemoryAllocationCount`).
+    MemoryAllocations {
+        /// The most allocations the device holds at once.
+        max: u32,
+    },
+    /// A take that no free range fits made an allocation that the consumer's
+    /// [`BlockMappings::map`](crate::BlockMappings::map) did not map: the runtime freed it, and
+    /// hands out none of its blocks. Metal has no counterpart: its memory has no second mapping.
+    ///
+    /// Basis: ours (the consumer's hook gave the allocation no place in its own address range).
+    AllocationNotMapped {
+        /// The class of the allocation.
+        class: MemoryClass,
+        /// The length of the block the take asked for.
+        len: u64,
+    },
+    /// An import of a handle the device does not take
+    /// (`Device::import_dma_buf` and `Device::import_dma_bufs` on Unix,
+    /// [`Device::import_host_memory`](crate::Device::import_host_memory), a dma-buf surface's
+    /// buffer, [`Surface::buffer`](crate::Surface::buffer), and `Device::import_d3d11_surface`
+    /// on Windows): it does not list the handle's extensions (`VK_KHR_external_memory_fd` and
+    /// `VK_EXT_external_memory_dma_buf` for a dma-buf, `VK_EXT_external_memory_host` for host
+    /// memory, `VK_KHR_external_memory_win32` for a Direct3D 11 texture), or its buffers do not
+    /// import the handle (`vkGetPhysicalDeviceExternalBufferProperties`); for a Direct3D 11
+    /// texture, its optimal images of the plane's formats import the handle with no usage the
+    /// plane's view format holds, or not with all of them
+    /// (`vkGetPhysicalDeviceImageFormatProperties2`). For several dma-bufs, also where
+    /// the device does not bind them into one sparse buffer: it lacks `sparseBinding`, its queue
+    /// family binds no sparse memory, its sparse buffers import no dma-buf or only dedicated, or
+    /// such a buffer does not take every host-visible, host-coherent type a plain one takes
+    /// (`Device::dma_buf_granule`, on Unix, is `None`). Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
+    /// memory.
+    ///
+    /// Basis: device (the device's extensions, features, queue family and external buffer
+    /// properties).
+    NoImport {
+        /// The handle asked for.
+        handle: ImportHandle,
+    },
+    /// An import whose handle's memory type query offers no type the import takes, so nothing is
+    /// imported: for a dma-buf, the first type the fd's query offers is not host-visible and
+    /// host-coherent, or the buffer's memory requirements do not list it; for several, that holds
+    /// of one fd, or one fd's type is not the first fd's, which `listed` then names alone; for
+    /// host memory, the pointer's query offers no type that is both and that the requirements
+    /// list; for a Direct3D 11 texture, the handle's properties
+    /// (`vkGetMemoryWin32HandlePropertiesKHR`) and the plane image's requirements share no type.
+    /// Metal's counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any
+    /// page-aligned memory.
+    ///
+    /// Basis: device (the handle's memory type query and the buffer's or image's memory
+    /// requirements).
+    ImportType {
+        /// The handle asked for.
+        handle: ImportHandle,
+        /// The types the handle's query offered, one bit each.
+        offered: u32,
+        /// The types the buffer's (or plane image's) memory requirements list, one bit each.
+        listed: u32,
+    },
+    /// An import of no bytes, or one whose address or length is not a multiple of `alignment`:
+    /// for host memory the device's `minImportedHostPointerAlignment`, for several dma-bufs each
+    /// one's length against `Device::dma_buf_granule` on Unix (or the
+    /// sparse buffer's alignment where the granule is no multiple of it), and for one handle the
+    /// alignment of the buffer's memory requirements where their size is past the length. Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes memory of a
+    /// whole number of pages at a page's first byte.
+    ///
+    /// Basis: device (`minImportedHostPointerAlignment` and the buffer's memory requirements).
+    ImportAlignment {
+        /// The handle asked for.
+        handle: ImportHandle,
+        /// The length asked for.
+        len: u64,
+        /// The multiple the device takes.
+        alignment: u64,
+    },
+    /// An import over several dma-bufs (`Device::import_dma_bufs`, on Unix) whose sparse buffer
+    /// would take the device's sparse address space past its `sparseAddressSpaceSize`, with the
+    /// sparse buffers still live (`VUID-vkCreateBuffer-flags-00911`): nothing is imported. Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
+    /// memory.
+    ///
+    /// Basis: device (`sparseAddressSpaceSize`).
+    SparseAddressSpace {
+        /// The bytes the import's buffer takes.
+        len: u64,
+        /// The bytes the live sparse buffers take.
+        live: u64,
+        /// The device's `sparseAddressSpaceSize`.
+        max: u64,
+    },
+    /// An export of a handle the device does not give
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)): it does not list the
+    /// handle's extensions (`VK_KHR_external_memory_fd` for an opaque fd, and with it
+    /// `VK_EXT_external_memory_dma_buf` for a dma-buf; `VK_KHR_external_memory_win32` for a
+    /// Windows handle), or its buffers do not export the handle
+    /// (`vkGetPhysicalDeviceExternalBufferProperties`). Metal has no counterpart.
+    ///
+    /// Basis: device (the device's extensions and its external buffer properties).
+    NoExport {
+        /// The handle asked for.
+        handle: ExportHandle,
+    },
+    /// An export of a handle the device gives, but not in the one form an export takes
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)): a dma-buf on a device
+    /// without `VK_EXT_queue_family_foreign`, whose ownership transfers with another driver have
+    /// no queue family to name (`VUID-VkBufferMemoryBarrier2-srcQueueFamilyIndex-09099`), or a
+    /// buffer exporting the handle whose memory requirements do not list the device's Private
+    /// memory type, the one type an export is made in. Also an exported surface's buffer in place
+    /// ([`Surface::buffer`](crate::Surface::buffer)) whose memory requirements (and, for a
+    /// dma-buf, the fd's memory type query) do not list the type the surface's memory is in, ask
+    /// more than its length, or require an allocation of its own. Metal has no counterpart.
+    ///
+    /// Basis: device (its extensions and the buffer's memory requirements).
+    ExportType {
+        /// The handle asked for.
+        handle: ExportHandle,
+        /// The types the buffer's memory requirements list (for a surface's dma-buf, those the
+        /// fd's query offers too), one bit each; `None` for a dma-buf on a device without the
+        /// foreign queue family, refused before a buffer is made.
+        listed: Option<u32>,
+    },
+    /// A multisample texture of a sample count the device does not make for its format, type and
+    /// usage.
+    ///
+    /// Basis: device (the image format query's `sampleCounts`).
+    TextureSamples {
+        /// The sample count asked for.
+        sample_count: u32,
+        /// The counts the device makes, one bit each (`VkSampleCountFlags`).
+        counts: u32,
+    },
+}
+
+impl Error {
+    /// Where the belief that this call must be refused comes from, by which a consumer's census
+    /// of the refusals its guests meet tells Metal's own refusals from this crate's gaps. Metal has
+    /// no counterpart: Metal's `NSError` carries no basis.
+    ///
+    /// - [`Error::Refused`], [`Error::Limit`] and [`Error::Unsupported`]: the one its variant
+    ///   declares.
+    /// - [`Error::BelowFloor`] and [`Error::NoDirectDriverLoading`]: [`RefusalBasis::Device`], as
+    ///   the device lacks what the floor needs, or the loader the extension that loads drivers.
+    /// - [`Error::Translation`]: the translator error's own
+    ///   ([`metal2vulkan::error::Error::basis`]), a refusal's from what it needs of the device.
+    /// - [`Error::Loader`], [`Error::Vulkan`], [`Error::Thread`] and [`Error::Fd`]: `None`, as
+    ///   the platform or a Vulkan call failed, which refuses no Metal input.
+    /// - [`Error::NoSuchBlock`], [`Error::StageUnfilled`] and [`Error::Quiesced`]: `None`, as the
+    ///   consumer's own block, stage or quiesce stops the call, which refuses no Metal input.
+    pub fn basis(&self) -> Option<RefusalBasis> {
+        match self {
+            Error::Refused(refusal) => Some(refusal.basis()),
+            Error::Limit(limit) => Some(limit.basis()),
+            Error::Unsupported(gap) => Some(gap.basis()),
+            Error::BelowFloor(_) | Error::NoDirectDriverLoading => Some(RefusalBasis::Device),
+            Error::Translation { error, .. } => error.basis(),
+            Error::Loader(_) | Error::Vulkan { .. } | Error::Thread(_) | Error::Fd(_) => None,
+            Error::NoSuchBlock(_) | Error::StageUnfilled(_) | Error::Quiesced => None,
+        }
+    }
+
+    /// The translator's `error` ([`Error::Translation`]), naming no function, for `map_err`.
+    pub(crate) fn translation(error: metal2vulkan::error::Error) -> Error {
+        Error::Translation {
+            error,
+            functions: Box::default(),
+        }
+    }
+
+    /// This error, where it is the translator's ([`Error::Translation`]), naming each function of
+    /// `stages` by its own name in its library; any other error as it is.
+    pub(crate) fn of_stages<'a>(self, stages: impl IntoIterator<Item = &'a StageSource>) -> Error {
+        match self {
+            Error::Translation { error, .. } => Error::Translation {
+                error,
+                functions: (stages.into_iter())
+                    .filter_map(|stage| match stage {
+                        StageSource::Function(function) => Some(function.function.info().name),
+                        StageSource::Compiled(_) => None,
+                    })
+                    .map(str::to_owned)
+                    .collect(),
+            },
+            other => other,
+        }
+    }
+
+    /// The error of a failed Vulkan `call`, for `map_err`.
+    pub(crate) fn vulkan(call: &'static str) -> impl FnOnce(vk::Result) -> Error {
+        move |result| Error::Vulkan { call, result }
+    }
+
+    /// An allocation's out-of-device-memory error.
+    pub(crate) fn out_of_device_memory() -> Error {
+        Error::Vulkan {
+            call: "vkAllocateMemory",
+            result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+        }
+    }
+
+    /// Whether it is an allocation's out-of-device-memory error.
+    pub(crate) fn is_out_of_device_memory(&self) -> bool {
+        matches!(
+            self,
+            Error::Vulkan {
+                result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                ..
+            }
+        )
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Loader(error) => write!(f, "no Vulkan loader: {error}"),
+            Error::NoDirectDriverLoading => f.write_str(
+                "the Vulkan loader does not offer VK_LUNARG_direct_driver_loading, so it takes no driver of the consumer's",
+            ),
+            Error::BelowFloor(below) => write!(f, "{below}"),
+            Error::Vulkan { call, result } => write!(f, "{call} failed: {result}"),
+            Error::Refused(refusal) => write!(f, "{refusal}"),
+            Error::Limit(limit) => write!(f, "{limit}"),
+            Error::NoSuchBlock(block) => {
+                write!(f, "block {} is not one the consumer holds", block.get())
+            }
+            Error::Thread(error) => write!(f, "a runtime thread did not start: {error}"),
+            Error::Fd(error) => write!(f, "no duplicate of a dma-buf's fd: {error}"),
+            Error::Quiesced => f.write_str("the device is quiesced"),
+            Error::Translation { error, functions } if functions.is_empty() => {
+                write!(f, "the translator made no pipeline: {error}")
+            }
+            Error::Translation { error, functions } => write!(
+                f,
+                "the translator made no pipeline of {}: {error}",
+                functions.join(", ")
+            ),
+            Error::Unsupported(gap) => write!(f, "{gap}"),
+            Error::StageUnfilled(request) => write!(
+                f,
+                "a kernel of entry weight {} is past the stage bound, and the cache directory \
+                 holds no helper's compile of it",
+                request.weight()
+            ),
+        }
+    }
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Refusal::EmptyBuffer => f.write_str("Metal makes no buffer of length 0"),
+            Refusal::BufferTooLong { length, max } => {
+                write!(f, "a buffer of {length} bytes is longer than {max}")
+            }
+            Refusal::BufferPastBlock {
+                offset,
+                length,
+                block_len,
+            } => write!(
+                f,
+                "a buffer of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
+            ),
+            Refusal::HeapBufferPlace {
+                offset,
+                length,
+                heap_len,
+            } => write!(
+                f,
+                "a heap buffer of {length} bytes at offset {offset} leaves its heap of {heap_len} bytes"
+            ),
+            Refusal::ManagedBlockPrivate { block } => write!(
+                f,
+                "a Managed buffer's bytes are in block {}, which is Private",
+                block.get()
+            ),
+            Refusal::ManagedCopyMissing => write!(
+                f,
+                "a Managed buffer on a device without unified memory needs a place for its device copy"
+            ),
+            Refusal::ManagedCopyOnUnified => write!(
+                f,
+                "a Managed buffer on a device with unified memory keeps no device copy to place"
+            ),
+            Refusal::ManagedCopyNotPrivate { block } => write!(
+                f,
+                "a Managed buffer's device copy is placed in block {}, which is not Private",
+                block.get()
+            ),
+            Refusal::ManagedCopyExported { block } => write!(
+                f,
+                "a Managed buffer's device copy is placed in block {}, which is exported",
+                block.get()
+            ),
+            Refusal::ZeroRangePastBlock {
+                offset,
+                length,
+                block_len,
+            } => write!(
+                f,
+                "a zero fill of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
+            ),
+            Refusal::NotExported { block } => write!(
+                f,
+                "an acquire or a release of block {}, which is not exported",
+                block.get()
+            ),
+            Refusal::SurfacePlanes {
+                planes,
+                pitch_multiple,
+                start_multiple,
+            } => write!(
+                f,
+                "a surface of {planes} planes, pitch multiple {pitch_multiple} and start multiple \
+                 {start_multiple}"
+            ),
+            Refusal::ZeroRangeShared { block } => write!(
+                f,
+                "a zero fill of block {}, which is Shared: the host zeroes its bytes",
+                block.get()
+            ),
+            Refusal::ModifiedRange {
+                start,
+                length,
+                buffer_length,
+            } => write!(
+                f,
+                "a changed range of {length} bytes from {start} leaves its buffer of \
+                 {buffer_length} bytes"
+            ),
+            Refusal::Committed => f.write_str("the command buffer is already committed"),
+            Refusal::InScheduledHandler => f.write_str(
+                "a scheduled handler runs on the submit thread, and this call may wait for it",
+            ),
+            Refusal::WaitOnOwnThread => f.write_str(
+                "this wait, in a handler or a listener, waits for what its own thread does next",
+            ),
+            Refusal::OtherDevice => f.write_str("the object is another device's"),
+            Refusal::NoCommandBuffers => {
+                f.write_str("a command queue must hold at least one command buffer")
+            }
+            Refusal::EncoderOpen => f.write_str("an encoder of the command buffer is open"),
+            Refusal::NoPipeline => f.write_str("no pipeline state is set"),
+            Refusal::CommandRange => f.write_str(
+                "the range lies past the indirect command buffer's commands, or the range \
+                 buffer's offset is not a multiple of 4 or leaves the buffer",
+            ),
+            Refusal::PatchDraw => f.write_str(
+                "patches are drawn with a post-tessellation vertex function's pipeline state, and \
+                 only with one",
+            ),
+            Refusal::NoTessellationFactorBuffer => {
+                f.write_str("a draw of patches needs a tessellation factor buffer")
+            }
+            Refusal::PointSizeTopology { class } => write!(
+                f,
+                "the vertex function writes a point size, which the {class:?} input primitive \
+                 topology class does not take"
+            ),
+            Refusal::BufferIndex { index } => {
+                write!(f, "buffer index {index} is past the 31 entries")
+            }
+            Refusal::NoBufferAtIndex { index } => write!(f, "no buffer is bound at index {index}"),
+            Refusal::TextureArgumentIndex { index } => {
+                write!(f, "texture index {index} is past the 128 entries")
+            }
+            Refusal::SamplerArgumentIndex { index } => {
+                write!(f, "sampler index {index} is past the 16 entries")
+            }
+            Refusal::FunctionTableIndex { index, count } => {
+                write!(f, "function table entry {index} is past its {count} entries")
+            }
+            Refusal::SamplerIds { numbered, given } => write!(
+                f,
+                "{given} sampler indices were given for the {numbered} samplers the state numbers"
+            ),
+            Refusal::ThreadgroupSize { size, max } => write!(
+                f,
+                "a threadgroup of {size:?} threads is empty or past the state's {max}"
+            ),
+            Refusal::ImageblockSize { width, height } => write!(
+                f,
+                "an imageblock of {width} by {height} is not powers of two of at most 1024 cells"
+            ),
+            Refusal::IndirectOffset { offset, length } => write!(
+                f,
+                "indirect arguments at offset {offset} of a {length}-byte buffer are not at a multiple of 4"
+            ),
+            Refusal::IndirectArgumentsPastEnd {
+                offset,
+                length,
+                needed,
+            } => write!(
+                f,
+                "{needed} bytes of indirect arguments at offset {offset} run past a {length}-byte buffer's end"
+            ),
+            Refusal::BufferOffsetAlignment {
+                index,
+                offset,
+                alignment,
+            } => write!(
+                f,
+                "the buffer at index {index}, bound at offset {offset}, is not at a multiple of its argument's {alignment}-byte alignment"
+            ),
+            Refusal::IndicesGranted { class, index } => {
+                write!(f, "{class:?} index {index} is granted already")
+            }
+            Refusal::IndicesNotGranted { class, index } => {
+                write!(f, "{class:?} index {index} is not granted")
+            }
+            Refusal::TextureIndex { index: Some(index) } => write!(
+                f,
+                "a texture no shader reaches takes no index, and {index} was given"
+            ),
+            Refusal::TextureIndex { index: None } => f.write_str(
+                "a texture shaders read or write, or a colour render target, takes an index, and \
+                 none was given",
+            ),
+            Refusal::TextureWithoutIndex { index } => write!(
+                f,
+                "the texture bound at texture index {index} is reached through its views alone, \
+                 with no index of its own; bind a view of it"
+            ),
+            Refusal::TextureZeroExtent => f.write_str("a texture has a width, height or depth of 0"),
+            Refusal::TextureExtentForType => {
+                f.write_str("the texture's height or depth is not 1 where its type needs 1")
+            }
+            Refusal::TextureCubeNotSquare => f.write_str("a cube texture's width and height differ"),
+            Refusal::TextureArrayLength { array_length } => write!(
+                f,
+                "an array length of {array_length} does not suit the texture's type"
+            ),
+            Refusal::TextureLevelCount { levels, max } => write!(
+                f,
+                "{levels} mipmap levels are none or past the texture's {max}"
+            ),
+            Refusal::TextureSampleCount { sample_count } => write!(
+                f,
+                "a sample count of {sample_count} does not suit the texture's type"
+            ),
+            Refusal::TextureSwizzleWithWrites => {
+                f.write_str("a swizzled texture takes no shader-write or render-target usage")
+            }
+            Refusal::TextureBytesPrivate => {
+                f.write_str("the CPU reaches no Private or Memoryless texture")
+            }
+            Refusal::TextureRegion { level, slice } => write!(
+                f,
+                "the region of level {level}, slice {slice} is not inside the texture"
+            ),
+            Refusal::TextureBytesLayout {
+                bytes_per_row,
+                bytes_per_image,
+                len,
+            } => write!(
+                f,
+                "rows {bytes_per_row} and images {bytes_per_image} bytes apart in {len} bytes do not hold the region"
+            ),
+            Refusal::BufferCopyLayout {
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+                len,
+            } => write!(
+                f,
+                "a region at {offset} with rows {bytes_per_row} and images {bytes_per_image} bytes apart is no layout Metal takes in a buffer of {len} bytes"
+            ),
+            Refusal::FillRange { start, end, len } => write!(
+                f,
+                "a fill of {start}..{end} is empty or past the buffer's {len} bytes"
+            ),
+            Refusal::TextureViewRange {
+                level,
+                level_count,
+                slice,
+                slice_count,
+            } => write!(
+                f,
+                "a view of {level_count} levels from {level} and {slice_count} slices from {slice} is empty or leaves the texture"
+            ),
+            Refusal::TextureViewSlices {
+                texture_type,
+                slice_count,
+            } => write!(
+                f,
+                "a {texture_type:?} view of {slice_count} slices, which Metal does not make of that type"
+            ),
+            Refusal::TextureViewFormat { texture, view } => write!(
+                f,
+                "a {view:?} view of a {texture:?} texture, which Metal does not view it as with \
+                 its usage"
+            ),
+            Refusal::MipmapFormat { pixel_format } => write!(
+                f,
+                "mipmaps of a {pixel_format:?} texture, which is not a colour-renderable, \
+                 filterable format"
+            ),
+            Refusal::TextureCopyMismatch {
+                source,
+                destination,
+            } => write!(
+                f,
+                "a copy from {source:?} to {destination:?} is between two formats or two sample counts, which Metal refuses"
+            ),
+            Refusal::ManagedTextureBytes { level, slice } => write!(
+                f,
+                "a Managed texture's bytes of level {level}, slice {slice} are not where a copy reads them in place"
+            ),
+            Refusal::BufferTextureLayout {
+                offset,
+                bytes_per_row,
+                len,
+            } => write!(
+                f,
+                "a texture at offset {offset}, rows {bytes_per_row} bytes apart, does not lie in whole texels inside a buffer of {len} bytes"
+            ),
+            Refusal::TextureBufferAlignment {
+                pixel_format,
+                offset,
+                alignment,
+            } => write!(
+                f,
+                "a texture buffer of {pixel_format:?} at offset {offset} is off the device's texture-buffer alignment of {alignment} bytes"
+            ),
+            Refusal::TextureBufferNotOverBuffer => f.write_str(
+                "a texture buffer is made over a buffer the consumer places (Buffer::new_texture)",
+            ),
+            Refusal::HeapTexturePlace {
+                offset,
+                size,
+                align,
+                heap_len,
+            } => write!(
+                f,
+                "a heap texture of {size} bytes aligned to {align} does not lie at offset {offset} of a heap of {heap_len} bytes"
+            ),
+            Refusal::DrawableDescriptor => f.write_str(
+                "a drawable's texture is a 2D texture of one level of its swapchain's image extent, over images of one layer",
+            ),
+            Refusal::DrawableFormat {
+                pixel_format,
+                held,
+                swapchain,
+            } => write!(
+                f,
+                "{pixel_format:?} is held in VkFormat {held}, and the swapchain's images are of VkFormat {swapchain}"
+            ),
+            Refusal::DrawableUsage { missing } => write!(
+                f,
+                "the swapchain's images lack usage {missing:#x} the drawable's texture takes"
+            ),
+            Refusal::NotDrawable => f.write_str("the texture is not over a swapchain's image"),
+            Refusal::DrawableAcquired => {
+                f.write_str("the drawable is acquired and not presented since")
+            }
+            Refusal::DrawableNotAcquired => f.write_str(
+                "the drawable is not acquired since its last present, or a command buffer presents it already",
+            ),
+            Refusal::DrawableSemaphoreRepeated => f.write_str(
+                "the command buffer already signals the semaphore for another drawable's present",
+            ),
+            Refusal::BufferCopyRange { offset, size, len } => write!(
+                f,
+                "a copy of {size} bytes at {offset} leaves a buffer of {len} bytes"
+            ),
+            Refusal::BufferCopyOverlap {
+                source_offset,
+                destination_offset,
+                size,
+            } => write!(
+                f,
+                "a copy of {size} bytes from {source_offset} to {destination_offset} reads bytes it writes"
+            ),
+            Refusal::AttachmentUsage { pixel_format } => write!(
+                f,
+                "an attachment's texture of {pixel_format:?} was made without RenderTarget usage"
+            ),
+            Refusal::AttachmentPlace { level, slice } => write!(
+                f,
+                "an attachment's level {level}, slice {slice} is past its texture's"
+            ),
+            Refusal::AttachmentFormat { pixel_format } => write!(
+                f,
+                "an attachment of {pixel_format:?} is not of its kind's formats"
+            ),
+            Refusal::NoAttachmentPass {
+                width,
+                height,
+                samples,
+            } => write!(
+                f,
+                "a pass with no attachment of {width} by {height} pixels at {samples} samples"
+            ),
+            Refusal::ResolveTexture => {
+                write!(f, "a store action resolves an attachment with no resolve texture")
+            }
+            Refusal::ResolveFormat { pixel_format } => write!(
+                f,
+                "a color attachment of {pixel_format:?} resolves, which an integer format does not"
+            ),
+            Refusal::VertexBufferOffset {
+                index,
+                offset,
+                length,
+            } => write!(
+                f,
+                "vertex buffer {index} at offset {offset} lies past its {length} bytes"
+            ),
+            Refusal::IndexBufferOffset { offset, length } => write!(
+                f,
+                "indices at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+            ),
+            Refusal::TessellationFactorOffset { offset } => write!(
+                f,
+                "tessellation factors at offset {offset} start at an odd byte"
+            ),
+            Refusal::ArgumentPlace { place, alignment } => write!(
+                f,
+                "arguments at byte {place} of their block are not at a multiple of {alignment}"
+            ),
+            Refusal::ViewportNotFinite => f.write_str("a viewport field is NaN or infinite"),
+            Refusal::StencilAttachment => {
+                f.write_str("a draw tests the stencil in a pass without a stencil attachment")
+            }
+            Refusal::NoVisibilityResultBuffer => {
+                f.write_str("a visibility result mode is set in a pass without a visibility result buffer")
+            }
+            Refusal::VisibilityResultOffset { offset, length } => write!(
+                f,
+                "a visibility result at offset {offset} of a {length}-byte buffer is misaligned or past its end"
+            ),
+            Refusal::VisibilityResultOffsetTaken { offset } => write!(
+                f,
+                "the visibility result offset {offset} is taken a second time in one encoder"
+            ),
+        }
+    }
+}
+
+impl fmt::Display for Gap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Gap::IndirectCommandBuffers { kind } => {
+                write!(f, "indirect command buffers of {kind:?} are not built")
+            }
+            Gap::KernelInput { kind } => write!(
+                f,
+                "the kernel reads an input the compute encoder does not supply yet: {kind:?}"
+            ),
+            Gap::StageIn { kind } => {
+                write!(f, "a kernel's stage input of a form not built yet: {kind:?}")
+            }
+            Gap::ImageblockLength => {
+                f.write_str("the state's imageblock length is not measured against Metal's")
+            }
+            Gap::NoStageInRegion => {
+                f.write_str("the kernel reads the stage-in region, which the encoder never set")
+            }
+            Gap::IndirectPrivateArena => f.write_str(
+                "an indirect dispatch of a kernel whose private memory is in the runtime's arena",
+            ),
+            Gap::PartialSimdgroups {
+                threads_per_threadgroup,
+                width,
+            } => write!(
+                f,
+                "a threadgroup of {threads_per_threadgroup:?} is not whole SIMD groups of {width} threads, and the state has no emulated module for it"
+            ),
+            Gap::PartialThreadgroups {
+                threads_per_grid,
+                threads_per_threadgroup,
+                ..
+            } => write!(
+                f,
+                "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
+            ),
+            Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
+            Gap::CubicSampler => f.write_str("cubic sampler filters are not built"),
+            Gap::TextureBufferSwizzle { pixel_format } => write!(
+                f,
+                "a swizzled texture buffer of {pixel_format:?} is not built"
+            ),
+            Gap::TextureFormat { pixel_format } => write!(
+                f,
+                "no texture of {pixel_format:?} is made on this device for the usage"
+            ),
+            Gap::MipmapFilter { pixel_format } => write!(
+                f,
+                "mipmaps of a {pixel_format:?} texture, whose image this device's blits do not filter"
+            ),
+            Gap::TextureBytes { pixel_format } => write!(
+                f,
+                "bytes are not copied to or from this texture of {pixel_format:?}"
+            ),
+            Gap::TextureCopy {
+                source,
+                destination,
+            } => write!(
+                f,
+                "this copy from a texture of {source:?} to one of {destination:?} is not built"
+            ),
+            Gap::OverlappingCopy { pixel_format } => write!(
+                f,
+                "this copy of {pixel_format:?} whose source and destination share memory in no \
+                 order a copy command keeps is not built"
+            ),
+            Gap::TextureOverBuffer { pixel_format } => write!(
+                f,
+                "this texture of {pixel_format:?} over a buffer is not held in place on this device"
+            ),
+            Gap::HeapTexture { pixel_format } => write!(
+                f,
+                "a heap texture of {pixel_format:?} is not placed in this heap on this device"
+            ),
+            Gap::SurfaceUsage {
+                pixel_format,
+                missing,
+            } => write!(
+                f,
+                "a surface plane of {pixel_format:?} in place lacks image usage {missing:#x} on \
+                 this device"
+            ),
+            Gap::D3d11SurfaceBuffer => f.write_str(
+                "a surface of Direct3D 11 textures has no buffer: its planes lie in memories of \
+                 their own",
+            ),
+            Gap::BufferCopyAlignment {
+                pixel_format,
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+            } => write!(
+                f,
+                "a copy of {pixel_format:?} at {offset} with rows {bytes_per_row} and images {bytes_per_image} bytes apart in a buffer is not built"
+            ),
+            Gap::FillAlignment { start, end } => write!(
+                f,
+                "a fill of {start}..{end}, not whole 4-byte words, is not built"
+            ),
+            Gap::SwizzledReadWrite { slot } => write!(
+                f,
+                "a read_write texture slot {slot} bound to a swizzled texture is not built"
+            ),
+            Gap::StorageElement {
+                slot: Some(slot),
+                pixel_format,
+                ..
+            } => write!(
+                f,
+                "texture slot {slot}, which a function writes or reads as storage, bound to a \
+                 {pixel_format:?} texture with no storage element on this device, or one it \
+                 cannot read without a format, is not built"
+            ),
+            Gap::StorageElement {
+                slot: None,
+                pixel_format,
+                ..
+            } => write!(
+                f,
+                "a kernel or a draw's function that may write or read as storage a texture \
+                 beyond its slots, where useResource declared a write of a {pixel_format:?} \
+                 texture with no storage element on this device, is not built"
+            ),
+            Gap::BicubicTexels { slot, pixel_format } => write!(
+                f,
+                "texture slot {slot}, which a function samples through a bicubic filter, bound to \
+                 a {pixel_format:?} texture, whose bicubic sample is not built"
+            ),
+            Gap::RenderPipeline { kind } => {
+                write!(f, "a render pipeline state with {kind:?} is not built")
+            }
+            Gap::TextureView {
+                kind: TextureViewKind::CubeOfArray,
+            } => f.write_str(
+                "a cube view of a 2D array whose image is not cube-compatible is not built: Vulkan views an image as a cube only where the image was made cube-compatible, which a non-square array's, or one whose format the device does not make so, is not",
+            ),
+            Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
+            Gap::RenderPass { kind } => write!(f, "a render pass with {kind:?} is not built"),
+            Gap::Draw { kind } => write!(f, "a draw with {kind:?} is not built"),
+            Gap::LinearPlanePass { kind } => {
+                f.write_str(
+                    "a render pass over a surface plane that renders as a linear colour \
+                     attachment alone is not rendered on this device ",
+                )?;
+                f.write_str(match kind {
+                    LinearPlanePassKind::OtherColor => {
+                        "beside a colour attachment that is not such a plane: Vulkan renders one \
+                         only where every colour attachment of the pass is linear"
+                    }
+                    LinearPlanePassKind::DepthStencil => {
+                        "beside a depth or stencil attachment: the driver lost the device on \
+                         that shape"
+                    }
+                    LinearPlanePassKind::Resolve => {
+                        "as a multisample attachment's resolve target: Vulkan renders one only \
+                         where every attachment of the pass is linear"
+                    }
+                })
+            }
+            Gap::StageSize { weight, cause } => {
+                write!(f, "a stage of entry weight {weight} past the stage bound is not made: ")?;
+                match cause {
+                    StageGap::Breach(breach) => write!(f, "its helper's compile met {breach:?}"),
+                    StageGap::NoCacheDirectory => f.write_str("the device has no cache directory"),
+                    StageGap::NoPipelineCache => {
+                        f.write_str("the device's driver keeps no pipeline cache data")
+                    }
+                    StageGap::RenderStage => f.write_str("no helper compiles a render stage"),
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Limit::BlockLen { len, max } => write!(
+                f,
+                "a block of {len} bytes is past the device's largest, {max} bytes"
+            ),
+            Limit::BlockIds => f.write_str("every block number has been used"),
+            Limit::ThreadgroupMemory { length, max, .. } => write!(
+                f,
+                "{length} bytes of threadgroup memory are past the device's {max}"
+            ),
+            Limit::ThreadgroupThreads { size, max } => write!(
+                f,
+                "a threadgroup of {size:?} threads is within Metal's limit for the kernel and past \
+                 this device's {max}"
+            ),
+            Limit::BytesLength { len, max } => {
+                write!(f, "{len} bytes are past the most one call takes, {max}")
+            }
+            Limit::IndexRange {
+                class,
+                first,
+                count,
+            } => write!(
+                f,
+                "{count} {class:?} indices from {first} are none or leave the class's range"
+            ),
+            Limit::TextureSize {
+                extent,
+                layers,
+                max_extent,
+                max_layers,
+            } => write!(
+                f,
+                "a texture of {extent:?} in {layers} layers is past the device's {max_extent:?} in {max_layers}"
+            ),
+            Limit::DeviceSamplers { max } => {
+                write!(f, "the device holds {max} samplers for sampler states already")
+            }
+            Limit::LodClampVariants { max } => write!(
+                f,
+                "{max} sampler states bound with LOD clamps of their own are live already"
+            ),
+            Limit::LevelElements { max } => write!(
+                f,
+                "none of the {max} runs of 16 level elements holds the texture's levels"
+            ),
+            Limit::MemoryAllocations { max } => {
+                write!(f, "the device holds {max} memory allocations already")
+            }
+            Limit::AllocationNotMapped { class, len } => write!(
+                f,
+                "the consumer did not map the {class:?} allocation made for a block of {len} bytes"
+            ),
+            Limit::NoImport { handle } => write!(f, "the device imports no {handle:?}"),
+            Limit::ImportType {
+                handle,
+                offered,
+                listed,
+            } => write!(
+                f,
+                "the {handle:?}'s query offers types {offered:#x}, and no host-visible, \
+                 host-coherent type the import takes of the buffer's {listed:#x}"
+            ),
+            Limit::ImportAlignment {
+                handle,
+                len,
+                alignment,
+            } => write!(
+                f,
+                "an import of {len} bytes of {handle:?} at no multiple of {alignment} bytes"
+            ),
+            Limit::SparseAddressSpace { len, live, max } => write!(
+                f,
+                "a sparse buffer of {len} bytes beside {live} bytes of live ones, past the \
+                 device's sparse address space of {max}"
+            ),
+            Limit::NoExport { handle } => write!(f, "the device exports no {handle:?}"),
+            Limit::ExportType {
+                handle,
+                listed: None,
+            } => write!(
+                f,
+                "the device has no foreign queue family for a {handle:?}'s ownership transfers"
+            ),
+            Limit::ExportType {
+                handle,
+                listed: Some(listed),
+            } => write!(
+                f,
+                "a buffer of {handle:?} lists types {listed:#x}, not the type its memory is in"
+            ),
+            Limit::TextureSamples {
+                sample_count,
+                counts,
+            } => write!(
+                f,
+                "a sample count of {sample_count} is not among the device's ({counts:#x})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Loader(error) => Some(error),
+            Error::BelowFloor(below) => Some(below),
+            Error::Vulkan { result, .. } => Some(result),
+            Error::Thread(error) | Error::Fd(error) => Some(error),
+            Error::Translation { error, .. } => Some(error),
+            Error::NoDirectDriverLoading
+            | Error::Refused(_)
+            | Error::Limit(_)
+            | Error::NoSuchBlock(_)
+            | Error::Quiesced
+            | Error::Unsupported(_)
+            | Error::StageUnfilled(_) => None,
+        }
+    }
+}

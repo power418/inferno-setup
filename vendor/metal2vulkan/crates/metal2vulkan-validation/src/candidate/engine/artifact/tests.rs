@@ -1,0 +1,198 @@
+//! The case artifact digest and the runtime guard.
+
+use std::collections::BTreeMap;
+
+use super::*;
+
+/// The hash of the runtime's sources this build pins (the runtime guard): 64 lowercase hex digits
+/// and a newline, which the orchestrator's merge tooling rewrites after a merge that leaves it
+/// stale.
+const RUNTIME_SOURCES: &str = include_str!("../../../../runtime-sources.sha256");
+
+fn digest(byte: u8) -> Hash256 {
+    [byte; 32]
+}
+
+/// The artifact names its parts by subject: the order a run recorded them in does not enter, a
+/// subject recorded twice must agree with itself, and nothing recorded is no artifact.
+#[test]
+fn a_case_artifact_is_its_parts_by_subject() {
+    let empty = CaseArtifact::default();
+    assert_eq!(empty.sha256(), None);
+
+    let other = "another".to_owned();
+    let mut a = CaseArtifact::default();
+    a.insert("case".into(), digest(1)).unwrap();
+    a.insert(other.clone(), digest(2)).unwrap();
+    let mut b = CaseArtifact::default();
+    b.insert(other.clone(), digest(2)).unwrap();
+    b.insert("case".into(), digest(1)).unwrap();
+    assert_eq!(a.sha256(), b.sha256());
+    assert_eq!(a.sha256().unwrap().len(), 64);
+
+    // The same subject again with the same digest is one part; with another, a failure.
+    b.insert("case".into(), digest(1)).unwrap();
+    assert_eq!(a.sha256(), b.sha256());
+    assert!(b.insert("case".into(), digest(9)).is_err());
+
+    let mut c = CaseArtifact::default();
+    c.insert("case".into(), digest(1)).unwrap();
+    assert_ne!(a.sha256(), c.sha256(), "a missing part moves the artifact");
+    c.insert(other, digest(3)).unwrap();
+    assert_ne!(a.sha256(), c.sha256(), "a moved part moves the artifact");
+}
+
+/// The record's JSON: the runtime version always, the digest when there is one, nothing else.
+#[test]
+fn an_executed_artifact_round_trips() {
+    for executed in [
+        ExecutedArtifact {
+            runtime_version: 1,
+            sha256: Some("ab".repeat(32)),
+        },
+        ExecutedArtifact {
+            runtime_version: 1,
+            sha256: None,
+        },
+    ] {
+        let json = serde_json::to_value(&executed).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ExecutedArtifact>(json.clone()).unwrap(),
+            executed
+        );
+        assert_eq!(json.get("sha256").is_some(), executed.sha256.is_some());
+    }
+    assert!(
+        serde_json::from_value::<ExecutedArtifact>(serde_json::json!({
+            "runtime_version": 1,
+            "extra": true
+        }))
+        .is_err()
+    );
+}
+
+/// The runtime guard. Validation pins the hash of the product's runtime sources
+/// (`crates/metal2vulkan-validation/runtime-sources.sha256`) beside the product's `RUNTIME_VERSION`; this fails when
+/// they differ, so an edit there is either declared free of
+/// behaviour (the hash alone moves) or bumps the version. The build's hash is the one computed
+/// here, and the inputs are closed over the module files their non-test code reaches: each such
+/// file is an input, or is listed below with why a run's behaviour does not depend on it beyond
+/// what the artifact digest already covers.
+#[test]
+fn the_runtime_sources_are_the_committed_ones() {
+    use sha2::{Digest, Sha256};
+    let product = metal2vulkan_devtools::workspace_dir().join("crates");
+    let inputs = env!("METAL2VULKAN_RUNTIME_INPUTS")
+        .split(':')
+        .collect::<Vec<_>>();
+    let files = inputs
+        .iter()
+        .map(|path| product.join(path))
+        .collect::<Vec<_>>();
+    let mut hash = Sha256::new();
+    crate::build_support::hash_files(&mut hash, &product, &files);
+    let now = crate::hash::hex_encode(hash.finalize());
+    assert_eq!(
+        now,
+        env!("METAL2VULKAN_RUNTIME_FINGERPRINT"),
+        "the test hashes the runtime's sources the way the build does"
+    );
+    assert_eq!(
+        RUNTIME_SOURCES.trim(),
+        now,
+        "the product's runtime sources changed (the validation crate's build.rs runtime inputs). If the \
+         edit changes no behaviour of a run, write {now} to crates/metal2vulkan-validation/runtime-sources.sha256 \
+         and say why in the commit; otherwise also bump metal2vulkan::cache::RUNTIME_VERSION \
+         (ask the orchestrator for the number). See docs/VALIDATION.md \"The runtime \
+         guard\"."
+    );
+
+    let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
+    let values = "the compiled pipeline's value types; the artifact digests their values";
+    let spirv = "the SPIR-V builder: the bind module's files reach it only through the merged draw's reads (bind/replay), which the compile emits into the merged variant; what they emit is in the pipeline the artifact digests";
+    let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's YCbCr write takes that file's sRGB encode (srgb_encode), which reaches none of it";
+    let not_runtime = BTreeMap::from([
+        ("metal2vulkan-air/src/abi/mod.rs", compile),
+        ("metal2vulkan-air/src/budget/mod.rs", "the work budget and its meters: a run it stops ends in a refusal, and it changes no answer"),
+        ("metal2vulkan-air/src/container/mod.rs", "the AIR container; the device profile reads its version constants at compile time"),
+        ("metal2vulkan-air/src/error.rs", compile),
+        ("metal2vulkan-air/src/intrinsics/mod.rs", packed),
+        ("metal2vulkan-air/src/ir/mod.rs", compile),
+        ("metal2vulkan-air/src/lib.rs", compile),
+        ("metal2vulkan/src/cache/mod.rs", "the `Hash256` re-export device/derive.rs names a profile's fingerprint with, and RUNTIME_VERSION itself, which cannot be among the sources it versions"),
+        ("metal2vulkan/src/error/mod.rs", "the error vocabulary: the runtime's code decides which error a run reports, and a record keeps the error as reported"),
+        ("metal2vulkan/src/lower/access/imageblock.rs", compile),
+        ("metal2vulkan/src/lower/access/mod.rs", "compile-time translation, reached only from lower/dispatch.rs's kernel plan, which asks `identity` whether the profile takes the identity domains; what it produces is in the pipeline the artifact digests"),
+        ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests"),
+        ("metal2vulkan/src/lower/arith/aggregate.rs", compile),
+        // The block decode (`bind/block_decode.rs`) and its exact division
+        // (`lower/arith/exact_division.rs`) reach the numeric forms and the constant emission at
+        // run time.
+        ("metal2vulkan/src/lower/arith/legal.rs", "the numeric forms (`Form`, `Held`, `FloatFmt`) every compiled pipeline's arithmetic is emitted in; the runtime's block decode and its exact division name their forms with them, so a change to what a form is is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
+        ("metal2vulkan/src/lower/arith/math.rs", packed),
+        ("metal2vulkan/src/lower/arith/mod.rs", compile),
+        ("metal2vulkan/src/lower/arith/narrow.rs", packed),
+        ("metal2vulkan/src/lower/arith/ops.rs", "the constant and type emission (`splat`, `ty`, `elem_ty`, `ones`) every compiled pipeline's arithmetic is made through; the runtime's exact division makes its constants with it, so a change to what it emits is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
+        ("metal2vulkan/src/lower/emit.rs", compile),
+        ("metal2vulkan/src/lower/mesh/mod.rs", "compile-time translation, reached only from the compile-time part of lower/dispatch.rs (plan_kernel's mesh wrapper builtins) and as the parent of its work-buffer layout (lower/mesh/work.rs, an input); what it produces is in the pipeline the artifact digests"),
+        ("metal2vulkan/src/lower/push.rs", "the push window's lowering, reached only from device/derive.rs, which reads `LEAST_BYTES`, Vulkan's least maxPushConstantsSize, to refuse a description below it before any pipeline exists, and from device/profile.rs, whose `push_window` reads `MOST_BYTES` to cap the device's window; what the lowering makes of the window is in the pipeline the artifact digests"),
+        ("metal2vulkan/src/lower/select.rs", compile),
+        ("metal2vulkan/src/memory/abi_index.rs", compile),
+        ("metal2vulkan/src/memory/contain.rs", "the containment encoding, a function of the device profile (the venue's profile key holds it), shared by compile and the vertex layout"),
+        ("metal2vulkan/src/memory/leaf.rs", compile),
+        ("metal2vulkan/src/memory/plan.rs", compile),
+        ("metal2vulkan/src/memory/provenance.rs", compile),
+        ("metal2vulkan/src/memory/union_find.rs", compile),
+        ("metal2vulkan/src/memory/views.rs", compile),
+        ("metal2vulkan/src/metal/resource_word.rs", "the gpuResourceID texture word of the runtime's ID spec (docs/RESOURCE-ID.md); the product's run-time files reach it only as a child of metal/mod.rs and call none of it"),
+        ("metal2vulkan/src/pipeline/compile.rs", compile),
+        ("metal2vulkan/src/pipeline/compile/key.rs", "the compile's cache key, which the artifact digest excludes"),
+        ("metal2vulkan/src/pipeline/compile/partition.rs", "compile-time translation, reached only from the compile-time part of lower/dispatch.rs (plan_kernel's grid edge: whether a kernel observes its threadgroup partition, decided from its AIR); what it produces is in the pipeline the artifact digests"),
+        ("metal2vulkan/src/pipeline/descriptor.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests (the pipeline descriptors)"),
+        ("metal2vulkan/src/pipeline/facts.rs", values),
+        ("metal2vulkan/src/pipeline/graphics.rs", "the compiled pipeline's value types; the artifact digests their values (the graphics state)"),
+        ("metal2vulkan/src/pipeline/interface.rs", values),
+        ("metal2vulkan/src/pipeline/lower_inputs.rs", "the compiled pipeline's value types; the artifact digests their values (the storage image classes)"),
+        ("metal2vulkan/src/pipeline/mod.rs", values),
+        ("metal2vulkan/src/pipeline/sym.rs", "the compiled pipeline's value types; the artifact digests their values (slots, push fields, handle classes)"),
+        ("metal2vulkan/src/spirv/builder/constructs.rs", spirv),
+        ("metal2vulkan/src/spirv/builder/mod.rs", spirv),
+        ("metal2vulkan/src/spirv/error.rs", spirv),
+        ("metal2vulkan/src/spirv/ids.rs", spirv),
+        ("metal2vulkan/src/spirv/ir/mod.rs", spirv),
+        ("metal2vulkan/src/spv.rs", "the SPIR-V grammar's opcodes and enumerants with their values, generated from Khronos's grammar: a value is fixed by the specification, and regenerating only adds or drops names, which no run can observe"),
+    ]);
+    // The resolver the classifier's key test holds its inputs closed with, across the product and
+    // the AIR front end's crate, which the product imports as `crate::air`, each by its directory
+    // in the workspace's crates/.
+    let members = [
+        crate::triage::classifier_inputs::Member {
+            name: "metal2vulkan_air",
+            dir: "metal2vulkan-air",
+        },
+        crate::triage::classifier_inputs::Member {
+            name: "metal2vulkan",
+            dir: "metal2vulkan",
+        },
+    ];
+    let dependencies =
+        crate::triage::classifier_inputs::dependencies(&product, &members, &inputs).unwrap();
+    let unlisted = dependencies
+        .iter()
+        .filter(|(file, _)| {
+            !inputs.contains(&file.as_str()) && !not_runtime.contains_key(file.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        unlisted.is_empty(),
+        "the runtime inputs reach files that are neither inputs nor listed: {unlisted:#?}"
+    );
+    let unreached = not_runtime
+        .keys()
+        .filter(|file| !dependencies.contains_key(**file))
+        .collect::<Vec<_>>();
+    assert!(
+        unreached.is_empty(),
+        "listed, but no runtime input reaches them: {unreached:#?}"
+    );
+}

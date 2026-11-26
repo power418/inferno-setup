@@ -1,0 +1,20 @@
+mkdir -p scripts/termux
+cat > scripts/termux/clang++ <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+prefix=${PREFIX:-/data/data/com.termux/files/usr}
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+	a=$1
+	shift
+	i=$((i + 1))
+	if [ "$a" = "-isystem" ] && [ "$i" -lt "$n" ] && [ "$1" = "$prefix/include" ]; then
+		shift
+		i=$((i + 1))
+		continue
+	fi
+	set -- "$@" "$a"
+done
+exec "$prefix/bin/clang++" "$@"
+EOF
+chmod +x scripts/termux/clang++

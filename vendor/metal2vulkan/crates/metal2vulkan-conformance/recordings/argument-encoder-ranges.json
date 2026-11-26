@@ -1,0 +1,626 @@
+{
+  "format": 1,
+  "case": "argument-encoder-ranges",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "px_samplers.ll",
+      "entry": "px_sample_argument",
+      "source_sha256": "8c4a0024c9ba10e25d2487017101ff9a6437a48c58602537d0a41ee693e32f20"
+    },
+    {
+      "fixture": "px_samplers.air.ll",
+      "entry": "px_sample_argument",
+      "source_sha256": "5cedd165bee51449aaab252183a73661902625d2ddf8aa9fa5582f605ea564b1"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8c4a0024c9ba10e25d2487017101ff9a6437a48c58602537d0a41ee693e32f20"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5cedd165bee51449aaab252183a73661902625d2ddf8aa9fa5582f605ea564b1"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dcd170e546734249218eb80f0abe0ea42fcb706c78b8729a612dd01f9c83bd9c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:coordinates",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "81ee2cc64601d5125d54053878ff828ce54f2b5fbd00bedec9095777757b1c28"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1fe49d153be76f3ad0f109b0e495a7b49d0623845e19205b2a23566bb876a677"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:output",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1080e279b51b8594a78556e2fdb4dfe9ca82ac2fbab5007de2bac4213c2e1f92"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:arguments",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1080e279b51b8594a78556e2fdb4dfe9ca82ac2fbab5007de2bac4213c2e1f92"
+                        }
+                      }
+                    },
+                    {
+                      "name": "layout",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3bf75d09b9a112bf60993752e077a6d7259bc6bcd298697bd8c9f50eba16d4ef"
+                        }
+                      }
+                    },
+                    {
+                      "name": "writes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6fb0c56bd153ad251fbc7d6f170b3d680a29ee5c3ad8c93425105b384e2f328a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "dispatch",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e7acdd7745f56a3b159f5a4f2a8fcb5ba72db33ed4afbc69c3b1fd6b12c48869"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/coordinates",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/output",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/arguments",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "encoder",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "facts",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "encoded_length",
+                      "observed": {
+                        "value": {
+                          "uint": 16
+                        }
+                      }
+                    },
+                    {
+                      "name": "alignment",
+                      "observed": {
+                        "value": {
+                          "uint": 8
+                        }
+                      }
+                    },
+                    {
+                      "name": "label",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Some",
+                            "payload": {
+                              "lines": [
+                                "conformance-argument-encoder"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "device",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "setArgumentBuffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "write/0-setTextures",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "write/1-setSamplerStates",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "changed-words",
+                  "observed": {
+                    "value": {
+                      "bytes": "AQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 256
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 32,
+                        "row_pitch": 32,
+                        "rows": 1,
+                        "image_pitch": 32,
+                        "images": 1,
+                        "gaps": "compared"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "output-read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "output",
+                  "observed": {
+                    "value": {
+                      "bytes": "AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAIA/AAAAAAAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPw=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 256
+                          }
+                        },
+                        "element": "f32",
+                        "row_offset": 0,
+                        "row_elements": 4,
+                        "row_pitch": 16,
+                        "rows": 16,
+                        "image_pitch": 256,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "argument-encoder-ranges",
+        "calls": 16,
+        "in_calls": 26884335,
+        "on_cpu": 908502,
+        "blocked": 25966750,
+        "elsewhere": 3092875,
+        "spend": 29943335,
+        "spend_least": 29094499,
+        "spend_most": 35947793,
+        "per_call": [
+          {
+            "call": "argument_encoder",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 23833,
+            "on_cpu": 24041,
+            "blocked": 0,
+            "wall_least": 21875,
+            "wall_most": 35375,
+            "wall_total": 23833,
+            "on_cpu_total": 24041,
+            "blocked_total": 0
+          },
+          {
+            "call": "argument_encoder_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 1583,
+            "on_cpu": 1750,
+            "blocked": 0,
+            "wall_least": 1458,
+            "wall_most": 7000,
+            "wall_total": 1583,
+            "on_cpu_total": 1750,
+            "blocked_total": 0
+          },
+          {
+            "call": "buffer",
+            "least_calls": 3,
+            "most_calls": 3,
+            "wall": 1750,
+            "on_cpu": 1875,
+            "blocked": 0,
+            "wall_least": 1542,
+            "wall_most": 2875,
+            "wall_total": 6793,
+            "on_cpu_total": 7167,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 71208,
+            "on_cpu": 71416,
+            "blocked": 0,
+            "wall_least": 63000,
+            "wall_most": 126292,
+            "wall_total": 71208,
+            "on_cpu_total": 71416,
+            "blocked_total": 0
+          },
+          {
+            "call": "dispatch",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 104166,
+            "on_cpu": 104292,
+            "blocked": 0,
+            "wall_least": 88167,
+            "wall_most": 163500,
+            "wall_total": 104166,
+            "on_cpu_total": 104292,
+            "blocked_total": 0
+          },
+          {
+            "call": "encode_argument",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 541,
+            "on_cpu": 667,
+            "blocked": 0,
+            "wall_least": 333,
+            "wall_most": 750,
+            "wall_total": 2042,
+            "on_cpu_total": 2292,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 22982209,
+            "on_cpu": 629834,
+            "blocked": 22336334,
+            "wall_least": 22403000,
+            "wall_most": 27626167,
+            "wall_total": 22982209,
+            "on_cpu_total": 629834,
+            "blocked_total": 22336334
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 209,
+            "on_cpu": 375,
+            "blocked": 0,
+            "wall_least": 125,
+            "wall_most": 334,
+            "wall_total": 876,
+            "on_cpu_total": 1292,
+            "blocked_total": 0
+          },
+          {
+            "call": "sampler",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4583,
+            "on_cpu": 4750,
+            "blocked": 0,
+            "wall_least": 3666,
+            "wall_most": 7584,
+            "wall_total": 4583,
+            "on_cpu_total": 4750,
+            "blocked_total": 0
+          },
+          {
+            "call": "set_argument_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 250,
+            "on_cpu": 417,
+            "blocked": 0,
+            "wall_least": 208,
+            "wall_most": 417,
+            "wall_total": 250,
+            "on_cpu_total": 417,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_2d_in_role",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 30500,
+            "on_cpu": 30667,
+            "blocked": 0,
+            "wall_least": 25375,
+            "wall_most": 51625,
+            "wall_total": 30500,
+            "on_cpu_total": 30667,
+            "blocked_total": 0
+          },
+          {
+            "call": "wait",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 3642625,
+            "on_cpu": 12209,
+            "blocked": 3630416,
+            "wall_least": 3519958,
+            "wall_most": 4208917,
+            "wall_total": 3642625,
+            "on_cpu_total": 12209,
+            "blocked_total": 3630416
+          }
+        ]
+      }
+    }
+  ]
+}

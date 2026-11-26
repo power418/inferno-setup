@@ -1,9 +1,1 @@
-# [submodule "vendor/Inferno"]
-# 	path = vendor/Inferno
-# 	url = https://git.chefkiss.dev/AppleHax/Inferno.git
-# 	branch = master
-
-[submodule "vendor/metal2vulkan"]
-	path = vendor/metal2vulkan
-	url = https://github.com/power418/metal2vulkan.git
-	branch = master
+# Submodules removed: vendored as plain directories.

@@ -1,0 +1,193 @@
+{
+  "format": 1,
+  "case": "detach-in-a-completed-handler",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "host-buffer",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2777ae5167055c2dc6ec1af346773594f3a5c92bb4149bdadd7aada6f192fbac"
+                        }
+                      }
+                    },
+                    {
+                      "name": "fill-bytes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a06f129fc52abf6085679d7cd71dc41ec7580c7f5f73efef6d02dde22bb00994"
+                        }
+                      }
+                    },
+                    {
+                      "name": "fill-byte",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bbeebd879e1dff6918546dc0c179fdde505f2a21591c9a9c96e36b054ec5af83"
+                        }
+                      }
+                    },
+                    {
+                      "name": "handler-wait-millis",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0c27700c82d333aa295692f1814040a962d7bc530253af661d97635dd5ed7af9"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "host-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "detach",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "detach-backing/in-a-completed-handler-once-the-use-retired",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer/status-when-the-handler-answered",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "detach-in-a-completed-handler",
+        "calls": 2,
+        "in_calls": 35226583,
+        "on_cpu": 1246833,
+        "blocked": 33979917,
+        "elsewhere": 3545417,
+        "spend": 38777874,
+        "spend_least": 37606250,
+        "spend_most": 39829916,
+        "per_call": [
+          {
+            "call": "detach_in_a_completed_handler",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 35216250,
+            "on_cpu": 1236333,
+            "blocked": 33979917,
+            "wall_least": 34149500,
+            "wall_most": 35611458,
+            "wall_total": 35216250,
+            "on_cpu_total": 1236333,
+            "blocked_total": 33979917
+          },
+          {
+            "call": "host_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 10542,
+            "on_cpu": 10750,
+            "blocked": 0,
+            "wall_least": 9750,
+            "wall_most": 12167,
+            "wall_total": 10542,
+            "on_cpu_total": 10750,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

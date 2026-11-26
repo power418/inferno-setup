@@ -1,0 +1,149 @@
+# Reach marks of docs/REFUSALS.md: section<TAB>variant<TAB>mark<TAB>why. Marks: system (a guest's
+# CoreAnimation, CoreImage or VideoToolbox plausibly reaches it), app (a typical Metal app from
+# public API), rare (specialized public API), none (no public API path). A judgment, kept by hand;
+# refusal_surface.py lists every variant that has none (--missing-reach).
+feature	LibraryKind	none	a metallib file type Apple's toolchain is not seen to write
+feature	Stage	none	a stage outside AIR's public stages
+feature	AddressSpace	none	Apple's AGX library address spaces
+feature	ModuleRecord	none	LLVM constructs AIR does not emit
+feature	Instruction	none	LLVM instructions AIR does not emit
+feature	Type	none	LLVM types AIR does not emit
+feature	CallingConvention	none	LLVM calling conventions AIR does not use
+feature	UnknownIntrinsic	rare	AIR from a newer compiler (macOS 27 AIR 2.9)
+feature	AgxUnmodeled	rare	Apple's own libraries' AGX intrinsics
+feature	StaticInitializer	none	LLVM initializers AIR does not emit
+feature	Recursion	rare	recursion through visible functions
+feature	DynamicCall	rare	function pointers and function tables
+feature	InlineAsm	none	inline assembly other than the empty asm("") decode drops, which MSL refuses to compile
+feature	Linking	rare	dynamic libraries and linked functions
+feature	SimdWidth	app	simdgroup functions on a device whose subgroups cannot run 32 wide for the use
+feature	LocalSize	app	a threadgroup size past a smaller device's limit
+feature	PartialThreadgroups	app	a dispatchThreads grid that is not whole threadgroups, of a kernel whose partial-threadgroups variant cannot be made
+feature	IrreducibleConvergent	rare	irreducible loops around barriers or simd operations
+feature	ComputeDerivativesWithSimd	rare	derivatives in a kernel
+feature	ComputeDerivatives	rare	derivatives in a kernel
+feature	QuadOperations	app	quad shuffles in kernels on devices without quad operations there
+feature	SimdgroupMatrix	rare	simdgroup matrix kernels
+feature	SimdgroupMatrix16x16x16	rare	16x16x16 simdgroup matrix products (Metal: Apple10 GPUs and later)
+feature	ArgumentBufferPointers	app	argument buffers holding buffer pointers
+feature	ArgumentBufferTextures	app	argument buffers holding textures and samplers (bindless)
+feature	ArgumentBufferObjects	rare	pipeline states and ICBs in argument buffers
+feature	DereferenceLoadedPointer	app	pointers loaded from argument buffers
+feature	PointerToInteger	rare	pointer to integer casts
+feature	PointerCompare	rare	comparing pointers of different roots
+feature	HandleAsPointer	rare	resource handles used as byte pointers
+feature	ConstantGlobalEscaping	rare	a constant global whose address escapes
+feature	ThreadgroupMemorySize	rare	threadgroup memory past a smaller device's limit
+feature	ZeroedThreadgroupMemory	rare	threadgroup memory on a device without shaderZeroInitializeWorkgroupMemory, which Vulkan 1.3 requires
+feature	CoherentMemory	rare	coherent(device) accesses
+feature	Int64Atomics	rare	64-bit atomics
+feature	ImageAtomics	rare	texture atomics beyond 32-bit integers
+feature	DescriptorCount	app	many textures or buffers in one stage on a smaller device
+feature	BufferRange	app	a buffer window past a device's descriptor range
+feature	Int64Arithmetic	rare	64-bit integers on a device without shaderInt64
+feature	Float64Arithmetic	rare	doubles (MSL has none outside Apple's own code)
+feature	Format	system	pixel formats a device lacks for a use (CoreVideo's 4:2:x and 10-bit formats among them)
+feature	DivergentImplicitLod	app	implicit-LOD sampling through a dynamically chosen texture
+feature	ImplicitLodOutsideFragment	rare	implicit-LOD sampling outside fragment functions
+feature	MinLodClamp	rare	min_lod_clamp on a device without shaderResourceMinLod
+feature	TexelOffset	app	texel offsets a device cannot apply
+feature	GatherExtended	rare	gathers with dynamic offsets or components
+feature	StorageImageMultisample	rare	writable multisampled textures
+feature	StorageTextureInVertexStage	rare	writable textures in vertex functions
+feature	CubeArray	rare	cube arrays on a device without imageCubeArray
+feature	SamplerAnisotropy	app	anisotropic samplers an argument buffer lists, on a device without samplerAnisotropy
+feature	SamplerBorderColor	app	border colors a device cannot express
+feature	SamplerLodBias	app	constexpr samplers with an LOD bias
+feature	SamplerCompare	app	compare samplers a device cannot apply to the image
+feature	PixelSamplerCompare	none	Apple's compiler rejects it
+feature	TexelBuffer	app	texture buffers past a device's texel-buffer limits
+feature	RasterOrderGroups	rare	raster order groups
+feature	FramebufferFetch	system	programmable blending (framebuffer fetch); macOS 26.6.2's login reaches it (two WindowServer and RenderBox pipelines fetch RGB10A8_2P_XR10 attachments, the consumer's boots)
+feature	PrimitiveId	rare	primitive_id on a device without geometry or tessellation shaders, in an indexed draw or behind a mesh function
+feature	PrivatePrimitives	rare	a private primitive type drawn in the pulled list form (a vertex function that writes memory or the primitive_id varying, a vertex start past 2^31) on a device without device addresses
+feature	VertexAmplification	rare	vertex amplification
+feature	LayeredRendering	rare	layered rendering on a device without its features
+feature	ClipDistance	rare	clip distances on a device without them
+feature	DualSourceBlending	rare	dual-source blending on a device without it
+feature	Barycentrics	rare	barycentric coordinates
+feature	StencilExport	rare	stencil from the shader
+feature	SampleRateShading	rare	per-sample shading
+feature	PullModelInterpolation	rare	interpolant inputs read at the centroid, a sample or an offset
+feature	DivergentInterpolation	rare	an interpolant read at a sample or an offset in a branch, a loop or after a discard
+feature	PixelCoverageAtSampleRate	rare	coverage read at sample rate
+feature	InterfaceComponents	rare	too many varyings or attachments for a device
+feature	UnmatchedVarying	none	a Metal link error
+feature	KernelStageIn	rare	kernel stage-in combinations Metal leaves unestablished
+feature	VertexStepRate	app	instanced vertex layouts stepped at a rate above 1
+feature	VertexInputLayout	rare	vertex offsets or strides off their format's alignment, or past a device's limits
+feature	Tessellation	rare	tessellation
+feature	MeshShading	rare	mesh pipelines
+feature	TileShading	rare	tile shaders (Apple GPU families)
+feature	Imageblocks	rare	imageblocks (Apple GPU families)
+feature	RayTracing	rare	ray tracing (out of scope by ruling)
+feature	Tensors	rare	shader tensors
+feature	RasterizationRateMap	rare	rasterization rate maps
+feature	GpuEncodedIndirectCommands	rare	indirect command buffers encoded by a kernel
+feature	VulkanVersion	none	a device below Vulkan 1.2
+feature	PushWindow	none	a description whose maxPushConstantsSize is below 128 bytes, less than Vulkan lets a device report
+feature	IdentityDomains	none	the identity domains, which the runtime alone takes and which lower only kernels over buffer slots, textures in slots or argument buffers, and runtime samplers, so far
+feature	Constant	none	LLVM constant forms AIR does not emit
+feature	Attribute	none	LLVM ABI attributes AIR does not use
+feature	BitcodeRecord	none	bitcode records AIR does not emit
+feature	SyncScope	none	synchronization scopes AIR does not use
+feature	SubgroupOperations	app	simdgroup functions in a stage a device's subgroups do not support
+feature	DirectCall	rare	variadic or byval calls the inliner cannot take
+feature	WideSwitchLiteral	rare	64-bit switch literals
+feature	Lowering	system	the catch-all of lowering families not landed: any shader can meet one
+feature	SamplerAddressMode	app	mirror-clamp-to-edge on a device without it
+feature	AlphaToOne	rare	alphaToOneEnabled on a device without alphaToOne
+feature	StageStoresAndAtomics	app	stores or atomics in vertex or fragment functions on a device without the feature
+feature	FunctionConstantArgument	rare	a function-constant-removed argument read
+feature	SamplerBicubicFilter	system	bicubic filtering forms Metal does not establish; macOS 26.6.2 makes a runtime sampler with MTLSamplerMinMagFilterCubic (the consumer's boots), whose mip-filtered form is refused
+feature	GroupCount	rare	more threadgroups than a device dispatches, past the binder's split
+feature	IntersectionFunctionTable	rare	ray tracing (out of scope by ruling)
+feature	IndependentBlending	rare	per-attachment blending on a device without independentBlend
+feature	RasterSampleCount	app	a sample count a device lacks for the attachments
+feature	TriangleFillLines	app	wireframe on a device without fillModeNonSolid
+feature	TriangleFillPoints	system	Apple's GL renderer's glPolygonMode(GL_POINT) on a device without fillModeNonSolid, or a portability-subset device without pointPolygons (MoltenVK)
+feature	DepthClipClamp	app	depth clamp on a device without depthClamp
+feature	DepthBiasClamp	app	depth bias clamp on a device without depthBiasClamp
+feature	ConstantAlphaBlendFactor	app	blend-alpha factors on a portability-subset device without them
+feature	SparseTexture	rare	sparse residency reads
+feature	TextureSwizzle	app	texture swizzles whose Metal behaviour is unmeasured
+feature	PostDepthCoverage	rare	the coverage after early depth and stencil tests, on every device
+feature	PrivateMemory	rare	very large per-thread arrays
+feature	Reflection	rare	reflection of argument kinds Metal's answer is unmeasured for
+feature	ViewportDepthRange	rare	viewport depth outside [0, 1]
+feature	IndirectRenderState	rare	render state set by a kernel on an indirect command
+feature	GlobalBuiltinInFragment	rare	Metal 3.1 global built-ins in fragment functions
+feature	(computed)	none	helpers that build a refusal for a feature their callers name: see the "via a helper" rows
+limit	InlinedInstructions	rare	very large shaders after inlining
+limit	OutputBlocks	rare	very large control flow
+limit	IrreducibleDepth	none	deeply nested irreducible loops
+limit	SpirvWords	rare	very large output modules
+limit	WorkUnits	rare	very large shaders
+limit	LedgerBytes	rare	very large shaders
+limit	TypeCount	none	a type table past the cap
+limit	MetadataNodes	none	metadata past the cap
+limit	BitstreamNesting	none	malformed nesting
+limit	InstructionCount	rare	very large modules
+limit	LayoutNesting	none	argument-buffer layouts nested past the cap
+limit	ConstructNesting	none	control flow nested past the cap
+limit	PrivateArenaBytes	none	a private arena past 4 GiB
+limit	CallStackBytes	rare	deep visible-function call stacks
+ratemap	ScreenExtent	rare	a rate map whose screen is past 16384 a side
+ratemap	LayerCount	none	a rate map of more than two layers, which Apple's compile crashes on
+ratemap	DenseSamples	rare	a rate map axis with more quality samples than screen pixels
+ratemap	SampleOutOfRange	rare	a rate map quality sample outside [0, 1] among others
+ratemap	SampleCount	rare	a rate map axis of more distinct samples than measured (9 on one layer, 4 on two)
+budget	Time	none	a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds)
+feature	PrivateRenderState	none	Apple-private pipeline fields of OpenGL on Metal (no public header)
+feature	CommandPredication	none	Apple-private command predication on a device without buffer device addresses
+feature	ProgramScopeResource	app	MSL 3.2 textures, samplers and threadgroup memory bound at program scope (macOS 15 and later)
+feature	ProgramScopeSharedSlot	rare	MSL 3.2 program-scope buffers aliasing another argument of another type at one index
+feature	ProgramScopeLinked	rare	MSL 3.2 program-scope bindings in a linked visible function or a dynamic library
+feature	ProgramScopeRead	none	a read of a program-scope buffer's global that Apple's compiler is not seen to write
+feature	GenericPointer	system	MSL 4.1 generic pointers held in memory or of two spaces (macOS 27 and later)
+feature	SeqCstFence	rare	a seq_cst fence in a vertex or fragment stage without its stores and atomics
+feature	WideLines	none	a line under the Apple-private setLineWidth: at a width other than 1 drawn as the band, whose pipeline form the translator does not build (a selected slice or viewport, barycentric weights, multiview, synthesized geometry, too many stage outputs)

@@ -1,0 +1,210 @@
+{
+  "format": 1,
+  "case": "format-copies-r8-to-s8",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "formats",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "329046b79b195d7585b791c330517c99ed4166292b170f6af7deee919997fb7e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bytes:written",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b6458e74067512bc270702c13df805c9c2bd9fea4f58effa4ac2de094fe68e3d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "bytes:before",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8843b54d2df63ca265cf4a05d27dd2b29a74fb476d296dd44a0e171d74b441ca"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "work",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "destination",
+                  "observed": {
+                    "value": {
+                      "bytes": "Wv8BgA=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 4,
+                        "row_pitch": 4,
+                        "rows": 1,
+                        "image_pitch": 4,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "source",
+                  "observed": {
+                    "value": {
+                      "bytes": "Wv8BgA=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 4,
+                        "row_pitch": 4,
+                        "rows": 1,
+                        "image_pitch": 4,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "statuses",
+                  "observed": {
+                    "value": {
+                      "lines": [
+                        "Completed"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "work",
+          "message": "Copy From Texture Validation\n[sourceTexture pixelFormat](MTLPixelFormatR8Unorm) must equal [destinationTexture pixelFormat](MTLPixelFormatStencil8)"
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "format-copies-r8-to-s8",
+        "calls": 1,
+        "in_calls": 4016500,
+        "on_cpu": 98792,
+        "blocked": 3917541,
+        "elsewhere": 3775292,
+        "spend": 7791792,
+        "spend_least": 7301542,
+        "spend_most": 8568000,
+        "per_call": [
+          {
+            "call": "work",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4016500,
+            "on_cpu": 98792,
+            "blocked": 3917541,
+            "wall_least": 3820292,
+            "wall_most": 4437791,
+            "wall_total": 4016500,
+            "on_cpu_total": 98792,
+            "blocked_total": 3917541
+          }
+        ]
+      }
+    }
+  ]
+}

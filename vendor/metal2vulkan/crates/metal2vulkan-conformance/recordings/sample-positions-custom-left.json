@@ -1,0 +1,397 @@
+{
+  "format": 1,
+  "case": "sample-positions-custom-left",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_restart.ll",
+      "entry": "rt6_restart_vertex+rt6_restart_count",
+      "source_sha256": "ee3fb102a9172fb5214a2c468b5fb177a7000fb169043ed578a12dd5b43c0464"
+    },
+    {
+      "fixture": "rt6_restart.air.ll",
+      "entry": "rt6_restart_vertex+rt6_restart_count",
+      "source_sha256": "08138096f5f8bef1f56267558b5bbbf1c9780e08bae5d84b87f3da4025ab6d09"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ee3fb102a9172fb5214a2c468b5fb177a7000fb169043ed578a12dd5b43c0464"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "08138096f5f8bef1f56267558b5bbbf1c9780e08bae5d84b87f3da4025ab6d09"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4dbc20f5c99d6caaaef3fe3b57ef7a1307bb278183cb9fa5591e2d80b5d5cccc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8a7bc263f8105f73d8a4a1669a32fd4468076fb940c1ec6f7a26f1ef2ebc5ff3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "resolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "84d9f4366da2d180bd2c9a0c0c0ec5a5f91d7e745b28088b7971335c2aa913fb"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e6c54a9dd573965202c20b9ef65fbfb49bb1e8098e578f65e5f07fe1c0ab7228"
+                        }
+                      }
+                    },
+                    {
+                      "name": "vertices",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f2df32a2160f721d5a70c07c8cbc9134e1e986712ebd31c961c3bac754d632d2"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "vertices",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "calls",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "0-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "coverage",
+                  "observed": {
+                    "value": {
+                      "lines": [
+                        "4 of 4 samples"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "resolved",
+                  "observed": {
+                    "value": {
+                      "bytes": "AQAA/w=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 4,
+                        "row_pitch": 4,
+                        "rows": 1,
+                        "image_pitch": 4,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "sample-positions-custom-left",
+        "calls": 8,
+        "in_calls": 30605835,
+        "on_cpu": 1054876,
+        "blocked": 29583792,
+        "elsewhere": 7327459,
+        "spend": 37885669,
+        "spend_least": 36920625,
+        "spend_most": 39261918,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 1667,
+            "on_cpu": 1750,
+            "blocked": 0,
+            "wall_least": 1500,
+            "wall_most": 2042,
+            "wall_total": 4708,
+            "on_cpu_total": 4875,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 22860542,
+            "on_cpu": 658375,
+            "blocked": 22233125,
+            "wall_least": 22034459,
+            "wall_most": 24004167,
+            "wall_total": 22860542,
+            "on_cpu_total": 658375,
+            "blocked_total": 22233125
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 542,
+            "on_cpu": 667,
+            "blocked": 0,
+            "wall_least": 375,
+            "wall_most": 625,
+            "wall_total": 542,
+            "on_cpu_total": 667,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 7633958,
+            "on_cpu": 218625,
+            "blocked": 7421417,
+            "wall_least": 7503083,
+            "wall_most": 7930959,
+            "wall_total": 7633958,
+            "on_cpu_total": 218625,
+            "blocked_total": 7421417
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 131000,
+            "on_cpu": 131209,
+            "blocked": 0,
+            "wall_least": 122917,
+            "wall_most": 145625,
+            "wall_total": 131000,
+            "on_cpu_total": 131209,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 4375,
+            "on_cpu": 4542,
+            "blocked": 0,
+            "wall_least": 4041,
+            "wall_most": 7917,
+            "wall_total": 36626,
+            "on_cpu_total": 36916,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

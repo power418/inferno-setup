@@ -1,0 +1,516 @@
+//! An 8-bit sRGB texel read by the device's decode wherever the device samples the format, and by
+//! the MSL transfer through the device's `Pow` where it holds the format as its UNORM twin.
+//!
+//! - Without a slot's `SrgbTexture` variant every access reads the device's decode through the
+//!   slot's sRGB view, declaring no table: `PrecisionNote::SrgbTexelDecode` under the bound
+//!   format's class.
+//! - Under the variant (a format the device cannot sample, held as its UNORM twin) every access
+//!   decodes what the twin's view reads (one texel's codes, or the device's filter of them) by
+//!   the transfer through the device's `Pow`, declaring no table, and notes `SrgbTexelDecode`
+//!   outright. (The interpreter models no `Pow`, so no decoded value is run here.)
+//! - The binder joins a slot to the plan's variant exactly where the device holds the bound
+//!   format's twin, and its views then view the twin; elsewhere they view the sRGB format.
+//! - Every form validates on every committed profile.
+//!
+//! `llvm-as` assembles the kernels; without it the tests skip visibly.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::budget::SPIRV_WORDS;
+use crate::device::DevicePolicy;
+use crate::library::FunctionConstantValues;
+use crate::lower::select::LowerInputs;
+use crate::metal::format::bound_texel_format;
+use crate::metal::PixelFormat;
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
+use crate::pipeline::facts::RuntimeFact;
+use crate::pipeline::sym::{SlotClass, SlotRef, SpecKey, Stage};
+use crate::pipeline::testing::{
+    link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
+};
+use crate::pipeline::{PrecisionNote, SpecializedNote};
+use crate::spirv::testing::committed_profiles;
+
+const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
+
+const TEXTURE: SlotRef = SlotRef {
+    stage: Stage::Kernel,
+    class: SlotClass::Texture,
+    index: 0,
+};
+
+/// Bitcode of the module `body` (after the AIR header), or `None` without `llvm-as`.
+fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "m2v-srgb-raw-{}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+        name.replace(' ', "-")
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let ll = dir.join("k.ll");
+    std::fs::write(&ll, format!("{HEADER}{body}")).expect("write");
+    let r = llvm_assemble(&ll);
+    let _ = std::fs::remove_dir_all(&dir);
+    match r {
+        Ok(x) => Some(x),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            None
+        }
+        Err(AssembleError::Rejected(why)) => panic!("{name}: {why}"),
+    }
+}
+
+/// The words of a constexpr sampler (the `hlf_half_address` fixture's fields): minification and
+/// magnification `filter` (0 nearest, 1 linear), mip filter `mip` (0 none, 1 nearest, 2
+/// linear), every axis clamped to its edge, `pixel` coordinates.
+fn sampler_words(filter: u64, mip: u64, pixel: bool) -> u64 {
+    const BASE: u64 = 0x007b_ff00_0008_0000;
+    let edge = 1;
+    BASE | edge
+        | edge << 3
+        | edge << 6
+        | filter << 9
+        | filter << 11
+        | mip << 13
+        | u64::from(pixel) << 15
+}
+
+/// How a test kernel accesses `texture2d` slot 0 at its thread's texel `gid`.
+#[derive(Clone, Copy, Debug)]
+enum Access {
+    /// `t.read(gid)` of an `access::read` texture.
+    Read,
+    /// `t.sample(s, coord)` through a constexpr sampler of these words, at the texel's centre
+    /// (pixel coordinates, or normalized ones where the sampler's are).
+    Sample(u64),
+    /// `t.sample(s, coord)` through the runtime `[[sampler(0)]]`, at the texel's normalized
+    /// centre.
+    Runtime,
+    /// `t.gather(s, coord, 0, component)` through a nearest constexpr sampler.
+    Gather(u32),
+}
+
+/// A kernel accessing slot 0 (`half` texels, or `float`) as `access` at thread `gid` (a 16 x 16
+/// grid), storing the `half4` (`float4`) to `out[gid.x + 16 gid.y]` (buffer 0).
+fn kernel(access: Access, half: bool) -> String {
+    let (texel, vec4, size, out_ty) = if half {
+        ("half", "<4 x half>", 8, "half4")
+    } else {
+        ("float", "<4 x float>", 16, "float4")
+    };
+    let suffix = if half { "v4f16" } else { "v4f32" };
+    let (state_words, runtime) = match access {
+        Access::Read => (None, false),
+        Access::Sample(w) => (Some(w), false),
+        Access::Runtime => (None, true),
+        Access::Gather(_) => (Some(sampler_words(0, 0, false)), false),
+    };
+    let pixel = matches!(access, Access::Sample(w) if w & 1 << 15 != 0);
+    let scale = if pixel { "1.0" } else { "0.0625" };
+    let s = if runtime {
+        "%s"
+    } else {
+        "@__air_sampler_state"
+    };
+    let (tex_access, call, decl) = match access {
+        Access::Read => (
+            "read",
+            format!(
+                "%rs = call ptr addrspace(2) @air.get_read_sampler()\n  %r = call {{ {vec4}, i8 }} @air.read_texture_2d.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) %rs, <2 x i32> %gid, <2 x i32> zeroinitializer, i32 0, i32 1)"
+            ),
+            format!(
+                "declare ptr addrspace(2) @air.get_read_sampler()\ndeclare {{ {vec4}, i8 }} @air.read_texture_2d.{suffix}(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)"
+            ),
+        ),
+        Access::Sample(_) | Access::Runtime => (
+            "sample",
+            format!(
+                "%r = call {{ {vec4}, i8 }} @air.sample_texture_2d.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) {s}, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)"
+            ),
+            format!(
+                "declare {{ {vec4}, i8 }} @air.sample_texture_2d.{suffix}(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)"
+            ),
+        ),
+        Access::Gather(component) => (
+            "sample",
+            format!(
+                "%r = call {{ {vec4}, i8 }} @air.gather_texture_2d.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) {s}, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i32 {component}, i32 0)"
+            ),
+            format!(
+                "declare {{ {vec4}, i8 }} @air.gather_texture_2d.{suffix}(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i32, i32)"
+            ),
+        ),
+    };
+    let mut params = String::new();
+    let mut mds = Vec::new();
+    let mut next = 2;
+    if runtime {
+        params.push_str(", ptr addrspace(2) %s");
+        mds.push(format!("!{{i32 {next}, !\"air.sampler\", !\"air.location_index\", i32 0, i32 1, !\"air.arg_type_name\", !\"sampler\", !\"air.arg_name\", !\"s\"}}"));
+        next += 1;
+    }
+    mds.push(format!("!{{i32 {next}, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"gid\"}}"));
+    let first = 6;
+    let arg_mds: Vec<String> = (0..mds.len()).map(|i| format!("!{}", first + i)).collect();
+    let tail: String = mds
+        .iter()
+        .enumerate()
+        .map(|(i, m)| format!("!{} = {m}\n", first + i))
+        .collect();
+    let (state, states, state_md) = match state_words {
+        Some(w) => (
+            format!("@__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 {w}, i64 0], align 8\n\n"),
+            "!air.sampler_states = !{!5}\n",
+            "!5 = !{!\"air.sampler_state\", ptr addrspace(2) @__air_sampler_state}\n",
+        ),
+        None => (String::new(), "", ""),
+    };
+    format!(
+        r#"{state}define void @k(ptr addrspace(1) %t, ptr addrspace(1) %out{params}, <2 x i32> %gid) {{
+  %x = extractelement <2 x i32> %gid, i64 0
+  %y = extractelement <2 x i32> %gid, i64 1
+  %row = shl i32 %y, 4
+  %n = add i32 %x, %row
+  %i = zext i32 %n to i64
+  %fx = uitofp i32 %x to float
+  %fy = uitofp i32 %y to float
+  %cx = fadd float %fx, 0.5
+  %cy = fadd float %fy, 0.5
+  %c0 = insertelement <2 x float> zeroinitializer, float %cx, i64 0
+  %c1 = insertelement <2 x float> %c0, float %cy, i64 1
+  %uv = fmul <2 x float> %c1, <float {scale}, float {scale}>
+  {call}
+  %v = extractvalue {{ {vec4}, i8 }} %r, 0
+  %q = getelementptr inbounds {vec4}, ptr addrspace(1) %out, i64 %i
+  store {vec4} %v, ptr addrspace(1) %q, align {size}
+  ret void
+}}
+
+{decl}
+
+!air.kernel = !{{!0}}
+{states}!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, {arg_mds}}}
+!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.{tex_access}", !"air.arg_type_name", !"texture2d<{texel}, {tex_access}>", !"air.arg_name", !"t"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 {size}, !"air.arg_type_align_size", i32 {size}, !"air.arg_type_name", !"{out_ty}", !"air.arg_name", !"out"}}
+{state_md}{tail}"#,
+        arg_mds = arg_mds.join(", "),
+    )
+}
+
+/// Lowering inputs with slot 0 in the `SrgbTexture` variant (bound to a format the device holds
+/// as its UNORM twin), or none.
+fn inputs(variant: bool) -> LowerInputs {
+    let mut i = LowerInputs::new();
+    if variant {
+        i.srgb_textures.insert(TEXTURE);
+    }
+    i
+}
+
+fn lavapipe() -> crate::device::profile::DeviceProfile {
+    profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
+}
+
+fn m3() -> crate::device::profile::DeviceProfile {
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
+}
+
+/// Every access of an 8-bit sRGB texture slot records `RuntimeFact::SrgbTexture`. Without the
+/// variant every one of them (a read, a fetch, a nearest, linear, mipmapped or bicubic sample, a
+/// gather, a runtime sampler's sample) reads the device's own decode and declares no Metal table:
+/// on lavapipe and MoltenVK it notes `PrecisionNote::SrgbTexelDecode` under the bound format's
+/// class (an `RGBA8Unorm_sRGB` or ASTC sRGB texture's, not an `RGBA8Unorm` one's). Under the
+/// variant every access decodes what the twin's view reads by the MSL transfer through the
+/// device's `Pow`, declaring no table, and notes `SrgbTexelDecode` outright, on both devices. Every
+/// form validates on both devices.
+#[test]
+fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
+    let nearest = sampler_words(0, 0, false);
+    let linear = sampler_words(1, 0, false);
+    let bicubic = sampler_words(2, 0, false);
+    let fetch = sampler_words(0, 0, true);
+    // Each access, and whether it reads a `half`.
+    let cases = [
+        ("read half", Access::Read, true),
+        ("read float", Access::Read, false),
+        ("fetch half", Access::Sample(fetch), true),
+        ("fetch float", Access::Sample(fetch), false),
+        ("nearest half", Access::Sample(nearest), true),
+        ("nearest float", Access::Sample(nearest), false),
+        (
+            "nearest level",
+            Access::Sample(sampler_words(0, 1, false)),
+            false,
+        ),
+        ("gather red half", Access::Gather(0), true),
+        ("gather alpha half", Access::Gather(3), true),
+        ("gather float", Access::Gather(0), false),
+        ("bicubic half", Access::Sample(bicubic), true),
+        ("bicubic float", Access::Sample(bicubic), false),
+        ("linear half", Access::Sample(linear), true),
+        ("linear float", Access::Sample(linear), false),
+        (
+            "mip linear",
+            Access::Sample(sampler_words(0, 2, false)),
+            false,
+        ),
+        ("runtime half", Access::Runtime, true),
+        ("runtime float", Access::Runtime, false),
+    ];
+    let consts = FunctionConstantValues::defaults();
+    for (name, access, half) in cases {
+        let Some(bc) = assemble(name, &kernel(access, half)) else {
+            return;
+        };
+        for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
+            for variant in [false, true] {
+                let what = format!("{name} on {stem}, variant {variant}");
+                let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(variant))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    plan.facts
+                        .contains(&RuntimeFact::SrgbTexture { slot: TEXTURE }),
+                    "{what}"
+                );
+                assert!(
+                    plan.precision.contains(&PrecisionNote::SrgbTexelDecode),
+                    "{what}"
+                );
+                let noted = |pf| bound_note(&plan.specialized, pf);
+                for pf in [PixelFormat::RGBA8UnormSRGB, PixelFormat::ASTC4x4SRGB] {
+                    assert_eq!(noted(pf), !variant, "{what} {pf:?}");
+                }
+                assert!(!noted(PixelFormat::RGBA8Unorm), "{what}");
+                let a = compile_bitcode(
+                    &bc,
+                    EntryRef::Name("k"),
+                    &consts,
+                    &p,
+                    &inputs(variant),
+                    &mut meter(),
+                    SPIRV_WORDS,
+                )
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    !super::engine_fragment::holds_srgb_table(&a.module.words),
+                    "{what}"
+                );
+                // An alpha gather's lanes are alpha's, which no transfer decodes.
+                assert_eq!(
+                    takes_pow(&a.module.words),
+                    variant && name != "gather alpha half",
+                    "{what}"
+                );
+                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            }
+        }
+    }
+}
+
+/// Whether module `words` takes `GLSL.std.450`'s `Pow` (instruction 26): the transfer's decode.
+pub(super) fn takes_pow(words: &[u32]) -> bool {
+    const EXT_INST: u32 = 12;
+    const POW: u32 = 26;
+    let mut at = 5;
+    while let Some(&first) = words.get(at) {
+        let count = (first >> 16) as usize;
+        if first & 0xffff == EXT_INST && words.get(at + 4) == Some(&POW) {
+            return true;
+        }
+        at += count.max(1);
+    }
+    false
+}
+
+/// Whether `specialized` notes `PrecisionNote::SrgbTexelDecode` where texture slot 0 binds a
+/// texture of `pf`: a clause testing the bound format's class alone, as the runtime reads it.
+fn bound_note(specialized: &[SpecializedNote], pf: PixelFormat) -> bool {
+    specialized
+        .iter()
+        .filter(|s| s.note == PrecisionNote::SrgbTexelDecode)
+        .flat_map(|s| &s.when)
+        .any(|c| {
+            c.all.iter().all(|t| match t.key {
+                SpecKey::BoundTexelFormat(slot) => {
+                    assert_eq!(slot, TEXTURE);
+                    (bound_texel_format(pf) & t.mask == t.bits) == t.equal
+                }
+                _ => false,
+            })
+        })
+}
+
+/// A kernel sampling a `dims`-dimensional texture (`texture1d`, `texture2d`, or `texture3d`) slot 0
+/// of `half` texels (`float`) through the constexpr sampler of `words` at buffer 1's lane `tid`
+/// (a `float2`, its `x` for 1D; a `float4`'s `xyz` for 3D), storing the `half4` (`float4`) to
+/// buffer 0.
+fn filter_kernel(words: u64, dims: u8, half: bool) -> String {
+    filter_kernel_through(Some(words), dims, half)
+}
+
+/// [`filter_kernel`] through the constexpr sampler of `words`, or with none through the runtime
+/// `[[sampler(0)]]`.
+fn filter_kernel_through(words: Option<u64>, dims: u8, half: bool) -> String {
+    let (texel, vec4, size, out_ty, suffix) = if half {
+        ("half", "<4 x half>", 8, "half4", "v4f16")
+    } else {
+        ("float", "<4 x float>", 16, "float4", "v4f32")
+    };
+    let (tex_ty, name, args, call_args) = match dims {
+        1 => (
+            format!("texture1d<{texel}, sample>"),
+            "1d",
+            "ptr addrspace(1), ptr addrspace(2), float, i1, i32, i1, float, float, i32",
+            "float %u, i1 false, i32 0, i1 false, float 0.0, float 0.0, i32 0",
+        ),
+        2 => (
+            format!("texture2d<{texel}, sample>"),
+            "2d",
+            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
+            "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0",
+        ),
+        _ => (
+            format!("texture3d<{texel}, sample>"),
+            "3d",
+            "ptr addrspace(1), ptr addrspace(2), <3 x float>, i1, <3 x i32>, i1, float, float, i32",
+            "<3 x float> %uvw, i1 true, <3 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0",
+        ),
+    };
+    let (load, coord_size, coord_ty) = if dims == 3 {
+        (
+            "  %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %c, i64 %i\n  %c4 = load <4 x float>, ptr addrspace(1) %p, align 16\n  %uvw = shufflevector <4 x float> %c4, <4 x float> zeroinitializer, <3 x i32> <i32 0, i32 1, i32 2>\n",
+            16,
+            "float4",
+        )
+    } else {
+        (
+            "  %p = getelementptr inbounds <2 x float>, ptr addrspace(1) %c, i64 %i\n  %uv = load <2 x float>, ptr addrspace(1) %p, align 8\n  %u = extractelement <2 x float> %uv, i64 0\n",
+            8,
+            "float2",
+        )
+    };
+    // The constexpr sampler's state and its metadata, or the runtime sampler's parameter.
+    let (state, sampler, param, states, args_md, mds) = match words {
+        Some(words) => (
+            format!("@__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 {words}, i64 0], align 8\n\n"),
+            "@__air_sampler_state",
+            "",
+            "!air.sampler_states = !{!7}\n",
+            "!3, !4, !5, !6",
+            "!6 = !{i32 3, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"tid\"}\n!7 = !{!\"air.sampler_state\", ptr addrspace(2) @__air_sampler_state}\n",
+        ),
+        None => (
+            String::new(),
+            "%s",
+            ", ptr addrspace(2) %s",
+            "",
+            "!3, !4, !5, !6, !7",
+            "!6 = !{i32 3, !\"air.sampler\", !\"air.location_index\", i32 0, i32 1, !\"air.arg_type_name\", !\"sampler\", !\"air.arg_name\", !\"s\"}\n!7 = !{i32 4, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"tid\"}\n",
+        ),
+    };
+    format!(
+        r#"{state}define void @k(ptr addrspace(1) %t, ptr addrspace(1) %out, ptr addrspace(1) %c{param}, i32 %tid) {{
+  %i = zext i32 %tid to i64
+{load}  %r = call {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) {sampler}, {call_args})
+  %v = extractvalue {{ {vec4}, i8 }} %r, 0
+  %q = getelementptr inbounds {vec4}, ptr addrspace(1) %out, i64 %i
+  store {vec4} %v, ptr addrspace(1) %q, align {size}
+  ret void
+}}
+
+declare {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}({args})
+
+!air.kernel = !{{!0}}
+{states}!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{{args_md}}}
+!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"{tex_ty}", !"air.arg_name", !"t"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 {size}, !"air.arg_type_align_size", i32 {size}, !"air.arg_type_name", !"{out_ty}", !"air.arg_name", !"out"}}
+!5 = !{{i32 2, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 {coord_size}, !"air.arg_type_align_size", i32 {coord_size}, !"air.arg_type_name", !"{coord_ty}", !"air.arg_name", !"c"}}
+{mds}"#
+    )
+}
+
+/// Every access compiles and validates, with the slot in the variant (decoding the twin's codes)
+/// and without (the device's decode), on every committed profile.
+#[test]
+fn every_srgb_form_validates() {
+    let consts = FunctionConstantValues::defaults();
+    let forms = [
+        ("read half", Access::Read, true),
+        ("read float", Access::Read, false),
+        (
+            "fetch half",
+            Access::Sample(sampler_words(0, 0, true)),
+            true,
+        ),
+        (
+            "nearest float",
+            Access::Sample(sampler_words(0, 0, false)),
+            false,
+        ),
+        ("gather alpha half", Access::Gather(3), true),
+        ("gather red float", Access::Gather(0), false),
+        ("gather alpha float", Access::Gather(3), false),
+        (
+            "linear half",
+            Access::Sample(sampler_words(1, 0, false)),
+            true,
+        ),
+        (
+            "linear float",
+            Access::Sample(sampler_words(1, 0, false)),
+            false,
+        ),
+        (
+            "bicubic half",
+            Access::Sample(sampler_words(2, 0, false)),
+            true,
+        ),
+        (
+            "bicubic float",
+            Access::Sample(sampler_words(2, 0, false)),
+            false,
+        ),
+        ("runtime half", Access::Runtime, true),
+        ("runtime float", Access::Runtime, false),
+    ];
+    let mut kernels: Vec<(&str, String)> = forms
+        .iter()
+        .map(|(name, access, half)| (*name, kernel(*access, *half)))
+        .collect();
+    for (name, half) in [("linear 3d half", true), ("linear 3d float", false)] {
+        kernels.push((name, filter_kernel(sampler_words(1, 0, true), 3, half)));
+    }
+    for (name, half) in [("runtime 3d half", true), ("runtime 3d float", false)] {
+        kernels.push((name, filter_kernel_through(None, 3, half)));
+    }
+    for (name, k) in kernels {
+        let Some(bc) = assemble(name, &k) else {
+            return;
+        };
+        for ((stem, p), (twin, under)) in committed_profiles()
+            .expect("profiles")
+            .into_iter()
+            .flat_map(|sp| {
+                [
+                    (sp.clone(), ("", inputs(false))),
+                    (sp, (" twin", inputs(true))),
+                ]
+            })
+        {
+            let what = format!("{name}{twin} on {stem}");
+            let entry = EntryRef::Name("k");
+            let a = compile_bitcode(&bc, entry, &consts, &p, &under, &mut meter(), SPIRV_WORDS)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        }
+    }
+}
+
+// ---- The binder -------------------------------------------------------------------------------

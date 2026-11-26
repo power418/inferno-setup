@@ -1,0 +1,192 @@
+{
+  "format": 1,
+  "case": "compute-limits-attribute-64-max-64",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "compute_thread_limit.ll",
+      "entry": "compute_thread_limit_64",
+      "source_sha256": "038d53ea10e88bf3ef0afb0a8d044ddbc77f07a8edd6af3df3e6bc409cbd92bd"
+    },
+    {
+      "fixture": "compute_thread_limit.air.ll",
+      "entry": "compute_thread_limit_64",
+      "source_sha256": "38d1a31c40b4ce47a0b2e4dc3c2963d118bf614b97e3da6820360cc53c47a4ef"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "038d53ea10e88bf3ef0afb0a8d044ddbc77f07a8edd6af3df3e6bc409cbd92bd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "38d1a31c40b4ce47a0b2e4dc3c2963d118bf614b97e3da6820360cc53c47a4ef"
+                        }
+                      }
+                    },
+                    {
+                      "name": "descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b401500c975ae635b0d621176cab2c178b74a360a9f3549e96765ff2a193fe13"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "created",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "refused",
+                      "observed": {
+                        "value": {
+                          "bool": false
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_threadgroup",
+                      "observed": {
+                        "value": {
+                          "uint": 64
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 30.12 and ours at 38.41; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 413,
+      "times": {
+        "case": "compute-limits-attribute-64-max-64",
+        "calls": 2,
+        "in_calls": 56593459,
+        "on_cpu": 1145083,
+        "blocked": 55182125,
+        "elsewhere": 3917,
+        "spend": 56598251,
+        "spend_least": 46639875,
+        "spend_most": 81545667,
+        "per_call": [
+          {
+            "call": "compute_pipeline_limits",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 207792,
+            "on_cpu": 174500,
+            "blocked": 0,
+            "wall_least": 130708,
+            "wall_most": 383792,
+            "wall_total": 207792,
+            "on_cpu_total": 174500,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 56385667,
+            "on_cpu": 1013958,
+            "blocked": 55182125,
+            "wall_least": 46498542,
+            "wall_most": 81157250,
+            "wall_total": 56385667,
+            "on_cpu_total": 1013958,
+            "blocked_total": 55182125
+          }
+        ]
+      }
+    }
+  ]
+}

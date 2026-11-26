@@ -1,0 +1,402 @@
+{
+  "format": 1,
+  "case": "sample-positions-option-under-resolve",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "rt6_restart.ll",
+      "entry": "rt6_restart_vertex+rt6_restart_count",
+      "source_sha256": "ee3fb102a9172fb5214a2c468b5fb177a7000fb169043ed578a12dd5b43c0464"
+    },
+    {
+      "fixture": "rt6_restart.air.ll",
+      "entry": "rt6_restart_vertex+rt6_restart_count",
+      "source_sha256": "08138096f5f8bef1f56267558b5bbbf1c9780e08bae5d84b87f3da4025ab6d09"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ee3fb102a9172fb5214a2c468b5fb177a7000fb169043ed578a12dd5b43c0464"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "08138096f5f8bef1f56267558b5bbbf1c9780e08bae5d84b87f3da4025ab6d09"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "4dbc20f5c99d6caaaef3fe3b57ef7a1307bb278183cb9fa5591e2d80b5d5cccc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8a7bc263f8105f73d8a4a1669a32fd4468076fb940c1ec6f7a26f1ef2ebc5ff3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "resolve",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "84d9f4366da2d180bd2c9a0c0c0ec5a5f91d7e745b28088b7971335c2aa913fb"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a75c26a45b3686a6a4406b2fc097062920e66180c2a025194015897bab656f78"
+                        }
+                      }
+                    },
+                    {
+                      "name": "vertices",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f2df32a2160f721d5a70c07c8cbc9134e1e986712ebd31c961c3bac754d632d2"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "resolve",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "vertices",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "calls",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "0-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "coverage",
+                  "observed": {
+                    "value": {
+                      "lines": [
+                        "4 of 4 samples"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "resolved",
+                  "observed": {
+                    "value": {
+                      "bytes": "AQAA/w=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 4,
+                        "row_pitch": 4,
+                        "rows": 1,
+                        "image_pitch": 4,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "RenderPass Descriptor Validation\nstoreActionOptions on color attachment 0 includes MTLStoreActionOptionCustomSamplePositions, which does not apply to the store action (MTLStoreActionMultisampleResolve)."
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "sample-positions-option-under-resolve",
+        "calls": 8,
+        "in_calls": 29781541,
+        "on_cpu": 986207,
+        "blocked": 28727499,
+        "elsewhere": 7411750,
+        "spend": 37193291,
+        "spend_least": 36542791,
+        "spend_most": 38708584,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 1583,
+            "on_cpu": 1708,
+            "blocked": 0,
+            "wall_least": 1458,
+            "wall_most": 2042,
+            "wall_total": 4624,
+            "on_cpu_total": 4916,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 21946708,
+            "on_cpu": 613250,
+            "blocked": 21364333,
+            "wall_least": 21829417,
+            "wall_most": 23378875,
+            "wall_total": 21946708,
+            "on_cpu_total": 613250,
+            "blocked_total": 21364333
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 500,
+            "on_cpu": 708,
+            "blocked": 0,
+            "wall_least": 250,
+            "wall_most": 625,
+            "wall_total": 500,
+            "on_cpu_total": 708,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 7701333,
+            "on_cpu": 217000,
+            "blocked": 7484333,
+            "wall_least": 7359291,
+            "wall_most": 7798375,
+            "wall_total": 7701333,
+            "on_cpu_total": 217000,
+            "blocked_total": 7484333
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 114500,
+            "on_cpu": 114833,
+            "blocked": 0,
+            "wall_least": 109459,
+            "wall_most": 131291,
+            "wall_total": 114500,
+            "on_cpu_total": 114833,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 4375,
+            "on_cpu": 4500,
+            "blocked": 0,
+            "wall_least": 4333,
+            "wall_most": 4750,
+            "wall_total": 34292,
+            "on_cpu_total": 34625,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

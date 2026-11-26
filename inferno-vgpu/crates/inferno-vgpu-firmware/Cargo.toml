@@ -1,0 +1,18 @@
+[package]
+name = "inferno-vgpu-firmware"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "inferno-vgpu-fw"
+path = "src/main.rs"
+
+[dependencies]
+libc.workspace = true
+sha2.workspace = true
+zerocopy.workspace = true
+
+[lints]
+workspace = true

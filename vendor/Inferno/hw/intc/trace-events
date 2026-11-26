@@ -1,0 +1,2 @@
+# apple_aic.c
+aic_set_irq(int irq, int level) "AIC: External IRQ %d level set to %d"

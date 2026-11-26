@@ -1,0 +1,131 @@
+//! A fragment function's color outputs as the device converts them: which conversions each
+//! output's channels take, from `LoweringInputs::color_writes`, and the rounding Metal's
+//! `textureWriteRoundingMode` asks for (`arith::color_write`).
+//!
+//! The function records the map it compiled under for each attachment it writes
+//! (`StageIo::color_writes`, which link checks against the pipeline's), and writes each lane as
+//! computed, the device's conversion storing it, but for a half-float channel under
+//! `TextureWriteRoundingMode::NearestEven` (`color_writes::HALF_NEAREST`), which no device's
+//! conversion of Metal's default does: the function rounds it to nearest even on every profile, and
+//! the device's conversion of the rounded half is exact. A lane the device converts otherwise than
+//! Metal may records a note:
+//!
+//! - a channel whose conversion the device makes where it is not measured to make Metal's (a
+//!   blend other than one and zero, alpha-to-coverage's alpha, a format Metal was not measured
+//!   with, or a unorm, snorm, sRGB or small float channel)
+//!   records `PrecisionNote::DeviceColorConversion`; one whose blend Metal rounds to nearest even
+//!   ([`ChannelWrite::BlendedNearestEven`], a half-float channel under
+//!   `TextureWriteRoundingMode::NearestEven`) records `PrecisionNote::BlendedWriteRounding`;
+//! - a `half` output (held widened) to a half-float channel is already a half: the device's
+//!   conversion of it is exact;
+//! - a `bfloat` output never arrives: Metal's compiler rejects one, and the stage's outputs refuse
+//!   it before (`legal::refuse_bfloat_color`);
+//! - an integer output to a channel with a rule is Metal's pipeline error, which link refuses
+//!   (`ColorAttachment`): nothing converts it;
+//! - a NaN written to a half-float channel is stored as the device's conversion encodes it, and
+//!   the module records `PrecisionNote::DeviceNanEncoding`: Metal stores a `float` NaN as `0x7e00`
+//!   and a `half` NaN's own bits, and a `half` output reaches the attachment held widened by the
+//!   device's conversion, whose NaN is the device's (measured: NVIDIA's stores `0x7fff`, ANV and
+//!   RADV store `0xfe00`, lavapipe quiets or canonicalizes a `half` NaN, MoltenVK canonicalizes
+//!   it). An output every return of which holds a constant none of whose lanes is a NaN
+//!   (`stage_io::returns_no_nan`) stores none, and records no note for one.
+//!
+//! An attachment no lane of which rounds is not listed as rounded: it keeps its Vulkan blend of
+//! one and zero, through which the facts were measured too. An attachment a lane of
+//! which rounds is listed as rounded (`rounded_colors`), and takes no Vulkan blend of one and zero.
+
+use crate::lower::arith::color_write;
+use crate::lower::arith::{FloatFmt, Form};
+use crate::lower::emit::EmitCx;
+use crate::lower::select::SelectCx;
+use crate::pipeline::artifact::PrecisionNote;
+use crate::pipeline::color_writes;
+use crate::pipeline::lower_inputs::ChannelWrite;
+use crate::pipeline::sym::Stage;
+use crate::spirv::builder::FunctionBuilder;
+use crate::spirv::error::BResult;
+use crate::spirv::ids::Value;
+
+/// Plan the write of a fragment function's output of form `f` to color attachment `color`
+/// (dual-source index 0), through an output variable (see the module docs). `nan_free`: every value the function returns there is a constant none of whose lanes is
+/// a NaN, which stores no NaN.
+pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form, nan_free: bool) {
+    if cx.stage != Stage::Fragment {
+        return;
+    }
+    let Some(rules) = cx.inputs.color_writes.get(&color).copied() else {
+        return;
+    };
+    cx.families
+        .stage_io
+        .interface
+        .color_writes
+        .insert(color, rules);
+    let mut lanes = [None; 4];
+    let mut device = false;
+    let mut blended = false;
+    let mut nans = false;
+    for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
+        let Some(rule) = rule else { continue };
+        nans |= !nan_free && color_writes::half_float(rule) && !nan_kept(f);
+        match (rule, f.float_fmt()) {
+            (_, None | Some(FloatFmt::F64 | FloatFmt::BFloat)) => {}
+            // A `half` is a half already, whichever way the channel rounds.
+            (
+                ChannelWrite::FloatTowardZero {
+                    mantissa: 10..,
+                    signed: true,
+                }
+                | ChannelWrite::FloatNearestEven {
+                    mantissa: 10..,
+                    signed: true,
+                },
+                Some(FloatFmt::Half),
+            ) => {}
+            // The pipeline's rounding mode, which the function applies.
+            (rule @ ChannelWrite::FloatNearestEven { .. }, Some(_)) => *slot = Some(rule),
+            (ChannelWrite::BlendedNearestEven { .. }, _) => blended = true,
+            (_, Some(_)) => device = true,
+        }
+    }
+    if device {
+        cx.precision.insert(PrecisionNote::DeviceColorConversion);
+    }
+    if blended {
+        cx.precision.insert(PrecisionNote::BlendedWriteRounding);
+    }
+    if nans {
+        cx.precision.insert(PrecisionNote::DeviceNanEncoding);
+    }
+    if !lanes.iter().any(Option::is_some) {
+        return;
+    }
+    let sp = &mut cx.families.stage_io;
+    sp.rounded.insert(color, lanes);
+    let listed = &mut sp.interface.rounded_colors;
+    if let Err(at) = listed.binary_search(&color) {
+        listed.insert(at, color);
+    }
+}
+
+/// Whether the device stores the NaN a fragment function writes to a half-float channel from its
+/// output of form `f` as Metal does: a `float` or `half` output's on no device (the module docs).
+/// Another output stores no NaN of its own there.
+fn nan_kept(f: Form) -> bool {
+    !matches!(f.float_fmt(), Some(FloatFmt::F32 | FloatFmt::Half))
+}
+
+/// Output `x` (form `f`) to color attachment `color`, each lane the plan rounds rounded to nearest
+/// even (`color_writes::HALF_NEAREST`), the others as computed.
+pub(crate) fn round(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    f: Form,
+    x: Value,
+) -> BResult<Value> {
+    let Some(rules) = cx.plan.families.stage_io.rounded.get(&color).copied() else {
+        return Ok(x);
+    };
+    color_write::round(fb, f, x, &rules)
+}

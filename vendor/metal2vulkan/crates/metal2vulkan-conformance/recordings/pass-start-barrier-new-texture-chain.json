@@ -1,0 +1,789 @@
+{
+  "format": 1,
+  "case": "pass-start-barrier-new-texture-chain",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "psb_reads.ll",
+      "entry": "psb_rect+psb_solid+psb_read+psb_sample+psb_masked+psb_under",
+      "source_sha256": "6233968f3935bb2b18bc3addaa89eef1ece4c1e4482306dcbc80a1b330bb1f2b"
+    },
+    {
+      "fixture": "psb_reads.air.ll",
+      "entry": "psb_rect+psb_solid+psb_read+psb_sample+psb_masked+psb_under",
+      "source_sha256": "acdac26065af4bc16e6066e9e9c15ab715e49682d40b9d9100470f5e914f1d9a"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air:psb_reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6233968f3935bb2b18bc3addaa89eef1ece4c1e4482306dcbc80a1b330bb1f2b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed:psb_reads",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "acdac26065af4bc16e6066e9e9c15ab715e49682d40b9d9100470f5e914f1d9a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_read",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ebb52f7e5891201601b69e03ba26e07f387c7c5f741165c6d3481450100c4d09"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_masked",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "258370be8469e7539c7c0b47e499f61b06505542d73d008e35d05514ff279c1d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pipeline:psb_under",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ea7a95ec0e937e69975b4f5d1c06879369eee6413489407a6288be42c60c4b44"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dab42a33337b3c696f7060f7b7b4fcb946d10bce477803c577432c3d7982a9cc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dab42a33337b3c696f7060f7b7b4fcb946d10bce477803c577432c3d7982a9cc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target:2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "86044356327684e040f048549243421b15465924a5f8c3b0aab8559568857e4f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "59b65efad5571ab025ff821a9f738c6d4f41adf12502b08441751aeb688ffb51"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ece1a834901fad1d0e78392a4b0470638a29fb20f9e45c3c14c31de7f7df45b6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ffcfc7b034c9c51117d7f06fb019524f9a283505d1a48ece4113b20d30857421"
+                        }
+                      }
+                    },
+                    {
+                      "name": "pass:2",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f4e895b574eed0e2bfc1d1b593bbbcacd209c41225246ee069e2fd2a3a5a5004"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_masked",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:psb_under",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target:2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-back:2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "0-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "1-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "2-renderCommandEncoder",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "3-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "4-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "5-copyFromTextureToBuffer",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels-0",
+                  "observed": {
+                    "value": {
+                      "list": [
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 0
+                            },
+                            "rows": {
+                              "uint": 521
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "AP///w=="
+                                    },
+                                    "texels": {
+                                      "uint": 841
+                                    }
+                                  }
+                                },
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 841
+                                    },
+                                    "texel": {
+                                      "bytes": "AAAAAA=="
+                                    },
+                                    "texels": {
+                                      "uint": 55
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 521
+                            },
+                            "rows": {
+                              "uint": 55
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "AAAAAA=="
+                                    },
+                                    "texels": {
+                                      "uint": 896
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "read:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels-1",
+                  "observed": {
+                    "value": {
+                      "list": [
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 0
+                            },
+                            "rows": {
+                              "uint": 521
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "AP///w=="
+                                    },
+                                    "texels": {
+                                      "uint": 841
+                                    }
+                                  }
+                                },
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 841
+                                    },
+                                    "texel": {
+                                      "bytes": "AAAAAA=="
+                                    },
+                                    "texels": {
+                                      "uint": 55
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 521
+                            },
+                            "rows": {
+                              "uint": 55
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "AAAAAA=="
+                                    },
+                                    "texels": {
+                                      "uint": 896
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "read:2",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels-2",
+                  "observed": {
+                    "value": {
+                      "list": [
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 0
+                            },
+                            "rows": {
+                              "uint": 521
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "//8AwA=="
+                                    },
+                                    "texels": {
+                                      "uint": 841
+                                    }
+                                  }
+                                },
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 841
+                                    },
+                                    "texel": {
+                                      "bytes": "UGBwwA=="
+                                    },
+                                    "texels": {
+                                      "uint": 55
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "fields": {
+                            "at": {
+                              "uint": 521
+                            },
+                            "rows": {
+                              "uint": 55
+                            },
+                            "texels": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "at": {
+                                      "uint": 0
+                                    },
+                                    "texel": {
+                                      "bytes": "UGBwwA=="
+                                    },
+                                    "texels": {
+                                      "uint": 896
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Memory Barrier With Scope Validation\nscope (0x4) cannot contain MTLBarrierScopeRenderTargets on this device\nafterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this device\nFragment Function(psb_read): uses Texture binding at index 0 for t[0] which is also a color attachment at index 0. This may be a conflict as the color attachment's storeAction == MTLStoreActionStore and writeMask != MTLColorWriteMaskNone.\nMemory Barrier With Scope Validation\nscope (0x4) cannot contain MTLBarrierScopeRenderTargets on this device\nafterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this device\nFragment Function(psb_masked): uses Texture binding at index 0 for t[0] which is also a color attachment at index 0. This may be a conflict as the color attachment's storeAction == MTLStoreActionStore and writeMask != MTLColorWriteMaskNone.\nMemory Barrier With Scope Validation\nscope (0x4) cannot contain MTLBarrierScopeRenderTargets on this device\nafterStages (0x2) can not contain MTLRenderStageTile or MTLRenderStageFragment on this device\nFragment Function(psb_under): uses Texture binding at index 0 for t[0] which is also a color attachment at index 0. This may be a conflict as the color attachment's storeAction == MTLStoreActionStore and writeMask != MTLColorWriteMaskNone."
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 182.91 and ours at 178.06; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 358,
+      "times": {
+        "case": "pass-start-barrier-new-texture-chain",
+        "calls": 17,
+        "in_calls": 68593125,
+        "on_cpu": 4186499,
+        "blocked": 63965583,
+        "elsewhere": 11171500,
+        "spend": 79043125,
+        "spend_least": 69298627,
+        "spend_most": 112809293,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 301542,
+            "on_cpu": 302458,
+            "blocked": 0,
+            "wall_least": 152916,
+            "wall_most": 435750,
+            "wall_total": 301542,
+            "on_cpu_total": 302458,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 54382708,
+            "on_cpu": 1169833,
+            "blocked": 53222000,
+            "wall_least": 45697542,
+            "wall_most": 86490250,
+            "wall_total": 54382708,
+            "on_cpu_total": 1169833,
+            "blocked_total": 53222000
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 3,
+            "most_calls": 3,
+            "wall": 225792,
+            "on_cpu": 226917,
+            "blocked": 0,
+            "wall_least": 123583,
+            "wall_most": 285167,
+            "wall_total": 696792,
+            "on_cpu_total": 699667,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 12330250,
+            "on_cpu": 816292,
+            "blocked": 11458083,
+            "wall_least": 11543917,
+            "wall_most": 14318542,
+            "wall_total": 12330250,
+            "on_cpu_total": 816292,
+            "blocked_total": 11458083
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 5,
+            "most_calls": 5,
+            "wall": 144458,
+            "on_cpu": 145000,
+            "blocked": 0,
+            "wall_least": 68625,
+            "wall_most": 186708,
+            "wall_total": 974667,
+            "on_cpu_total": 978582,
+            "blocked_total": 10208
+          },
+          {
+            "call": "target",
+            "least_calls": 3,
+            "most_calls": 3,
+            "wall": 38958,
+            "on_cpu": 39500,
+            "blocked": 0,
+            "wall_least": 16792,
+            "wall_most": 55500,
+            "wall_total": 178542,
+            "on_cpu_total": 159916,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 3,
+            "most_calls": 3,
+            "wall": 33167,
+            "on_cpu": 33792,
+            "blocked": 0,
+            "wall_least": 10333,
+            "wall_most": 40459,
+            "wall_total": 98167,
+            "on_cpu_total": 99750,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

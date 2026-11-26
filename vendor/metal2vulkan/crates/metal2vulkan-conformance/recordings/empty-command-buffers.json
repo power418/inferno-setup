@@ -1,0 +1,330 @@
+{
+  "format": 1,
+  "case": "empty-command-buffers",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 5,
+      "outcomes": [
+        {
+          "runs": 5,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "fill-bytes",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "525c3368aba80a606f181bd81ae58ae0cff8a52d05b47ddc01c0c3d1273397e4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "handler-names",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9c9d5f7024091faa30ece62ecf0b1fd3b496256b88323d9430424dbd62715caa"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "empty-command-buffers",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "alone/status/in-the-scheduled-handler",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Scheduled",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/status/in-the-completed-handler",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/status/after-the-wait",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/zero-before-commit/kernelStartTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/zero-before-commit/kernelEndTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/positive-after-completion/kernelStartTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/positive-after-completion/kernelEndTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/kernel-interval-is-ordered",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/gpu-times",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/zero-before-commit/GPUStartTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/zero-before-commit/GPUEndTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/positive-after-completion/GPUStartTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/positive-after-completion/GPUEndTime",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/gpu-interval-is-one-point",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "alone/gpu-starts-no-earlier-than-the-kernel-end",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/completed-handler-order",
+                      "observed": {
+                        "value": {
+                          "lines": [
+                            "fill",
+                            "empty"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/fills-status-in-the-empty-ones-completed-handler",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/status/after-the-wait",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/kernel-starts-no-earlier-than-the-fills-kernel-end",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/gpu-times",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/gpu-interval-is-one-point",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    },
+                    {
+                      "name": "behind-a-fill/gpu-starts-no-earlier-than-the-fills-gpu-end",
+                      "observed": {
+                        "value": {
+                          "bool": true
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 19.42 and ours at 19.42; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 241,
+      "times": {
+        "case": "empty-command-buffers",
+        "calls": 1,
+        "in_calls": 6624250,
+        "on_cpu": 1072459,
+        "blocked": 5551791,
+        "elsewhere": 5197041,
+        "spend": 11975416,
+        "spend_least": 11305000,
+        "spend_most": 13432625,
+        "per_call": [
+          {
+            "call": "empty_command_buffers",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 6624250,
+            "on_cpu": 1072459,
+            "blocked": 5551791,
+            "wall_least": 6252208,
+            "wall_most": 8235584,
+            "wall_total": 6624250,
+            "on_cpu_total": 1072459,
+            "blocked_total": 5551791
+          }
+        ]
+      }
+    }
+  ]
+}

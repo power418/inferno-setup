@@ -1,0 +1,70 @@
+#pragma once
+
+#include "qemu/osdep.h"
+#include "hw/sysbus.h"
+#include "io/channel.h"
+#include "io/net-listener.h"
+#include "qom/object.h"
+#include "system/iothread.h"
+#include "hw/usb/usb-uplink.h"
+
+#include "mdns.h"
+#include "virtualhere-proto.h"
+
+#define TYPE_USB_VIRTUALHERE "usb-virtualhere"
+OBJECT_DECLARE_SIMPLE_TYPE(USBVirtualHereState, USB_VIRTUALHERE)
+
+#define TYPE_USB_VIRTUALHERE_CONN "usb-virtualhere-conn"
+OBJECT_DECLARE_SIMPLE_TYPE(USBVirtualHereConn, USB_VIRTUALHERE_CONN)
+
+typedef struct USBVirtualHerePacket
+{
+    USBUplinkPacket     base;
+    USBVirtualHereConn* conn;
+    int32_t             out_status;
+    uint8_t             hdr[VIRTUALHERE_HDR_LEN];
+    uint8_t             setup[VIRTUALHERE_SETUP_LEN];
+    uint8_t             ep_addr;
+    uint32_t            xfer_len;
+    void*               buffer;
+} USBVirtualHerePacket;
+
+struct USBVirtualHereConn
+{
+    Object parent_obj;
+
+    USBVirtualHereState* s;
+    QIOChannel*          ioc;
+    CoMutex              write_mutex;
+    QEMUTimer*           heartbeat_timer;
+    bool                 closed;
+    bool                 using_device;
+    bool                 use_pending;
+    char                 client_name[64];
+    char                 client_host[64];
+};
+
+struct USBVirtualHereState
+{
+    SysBusDevice parent_obj;
+
+    USBUplinkDevice usb;
+
+    IOThread*       iothread;
+    AioContext*     ctx;
+    QIONetListener* listener;
+    char*           addr;
+    bool            mdns_enabled;
+    MDNSService*    mdns;
+
+    Notifier exit_notifier;
+
+    USBVirtualHereConn* active_conn;
+    uint16_t            device_id;
+
+    char*    server_name;
+    char*    server_id;
+    char*    server_host;
+    uint8_t  server_guid[VIRTUALHERE_GUID_LEN];
+    uint32_t compression_limit;
+};

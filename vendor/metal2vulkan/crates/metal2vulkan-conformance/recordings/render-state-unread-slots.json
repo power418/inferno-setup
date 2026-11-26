@@ -1,0 +1,556 @@
+{
+  "format": 1,
+  "case": "render-state-unread-slots",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "tob_renders.ll",
+      "entry": "tob_rect+tob_triangle+tob_solid+tob_read",
+      "source_sha256": "41c076b9a59d34aa65706f301ddba9ed60c4ad8f0beae55f2679df50495f8b48"
+    },
+    {
+      "fixture": "tob_renders.air.ll",
+      "entry": "tob_rect+tob_triangle+tob_solid+tob_read",
+      "source_sha256": "62c34fb6d65ce1e8a577788317d44e0dee58bf8b45d4c5bb5e4c2ef1ca9e40bc"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 8,
+      "outcomes": [
+        {
+          "runs": 8,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "41c076b9a59d34aa65706f301ddba9ed60c4ad8f0beae55f2679df50495f8b48"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "62c34fb6d65ce1e8a577788317d44e0dee58bf8b45d4c5bb5e4c2ef1ca9e40bc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "render-pipeline",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3f17e0536057ade794ad4f34e42dfeea917b30c2d490c0c41a6e08776d8a9602"
+                        }
+                      }
+                    },
+                    {
+                      "name": "target",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e30e266ce662f49640ed8bada735aa55dd62bd87c65b989c627e240bb04af29b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:rects",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "73310b48368616896f9637d82b42612fa8f6c7dba373d6bf6a32567a9f1a6367"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:colors",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8924ccf76859cbcbebbc2d5abc74d5b6ffea0c3b0866147f47f4e4f84b704705"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clear",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7e66234cd745b3e9b22f591477558fb610f17f820abbf0aa5aaf6759da6e1701"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "640e494dd31edb66b0748239aa90547d77e8ab37843b5bc8352a5f39e5296f06"
+                        }
+                      }
+                    },
+                    {
+                      "name": "sampler:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3f333c7ed7736ed0d4c70ac07e5502c46699c5a04d479d7875b6818cc1e373fa"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:0",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a31bea4eb369654a49fa19f0b02c25a977cfc050993734dfe32cd4631db181ff"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:1",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a31bea4eb369654a49fa19f0b02c25a977cfc050993734dfe32cd4631db181ff"
+                        }
+                      }
+                    },
+                    {
+                      "name": "clamps",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "61d3bbaec6aa101f3b72fd4199e29cb2fc354eb0ef5826fb67d2f1a924166cc2"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render-pipeline",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "target",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:rects",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:colors",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "sampler:0",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "sampler:1",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer:read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pieces",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "pass",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "read",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Ok",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "drawn",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "texels",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPwAAgD4AAAA/AABAPwAAgD8AAIA+AAAAPwAAQD8AAIA/AACAPgAAAD8AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "texture": {
+                                "level": 0,
+                                "slice": 0,
+                                "aspect": "color",
+                                "sample": 0,
+                                "origin": [
+                                  0,
+                                  0,
+                                  0
+                                ],
+                                "size": [
+                                  4,
+                                  4,
+                                  1
+                                ]
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "render",
+          "message": "Set Vertex Textures Validation\nunused vertex binding in render encoder at Texture index 0.\nredundant setting of <AGXG15XFamilyTexture: 0xADDR>\n    label = <none>\n    textureType = MTLTextureType2D\n    pixelFormat = MTLPixelFormatRGBA32Float\n    width = 4\n    height = 4\n    depth = 1\n    arrayLength = 1\n    mipmapLevelCount = 1\n    sampleCount = 1\n    cpuCacheMode = MTLCPUCacheModeDefaultCache\n    storageMode = MTLStorageModeShared\n    hazardTrackingMode = MTLHazardTrackingModeTracked\n    resourceOptions = MTLResourceCPUCacheModeDefaultCache MTLResourceStorageModeShared MTLResourceHazardTrackingModeTracked\n    usage = MTLTextureUsageShaderRead\n    shareable = 0\n    framebufferOnly = 0\n    purgeableState = MTLPurgeableStateNonVolatile\n    swizzle = [MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleBlue, MTLTextureSwizzleAlpha]\n    isCompressed = 0\n    parentTexture = <null>\n    parentRelativeLevel = 0\n    parentRelativeSlice = 0\n    buffer = <null>\n    bufferOffset = 0\n    bufferBytesPerRow = 0\n    iosurface = 0x0\n    iosurfacePlane = 0\n    allowGPUOptimizedContents = YES\n    label = <none>.\nSet Vertex Sampler States Validation\nunused vertex binding in render encoder at Sampler index 0.\nredundant setting of <MTLDebugSamplerState: 0xADDR> -> <AGXG15XFamilySampler: 0xADDR>\n    label = <none>\n    device = <AGXG15CDevice: 0xADDR>\n        name = Apple M3 Max<MTLSamplerDescriptorInternal: 0xADDR>\n    label = <none>\n    minFilter = MTLSamplerMinMagFilterNearest\n    magFilter = MTLSamplerMinMagFilterNearest\n    mipFilter = MTLSamplerMipFilterNotMipmapped\n    maxAnisotropy = 1\n    sAddressMode = MTLSamplerAddressModeClampToEdge\n    tAddressMode = MTLSamplerAddressModeClampToEdge\n    rAddressMode = MTLSamplerAddressModeClampToEdge\n    normalizedCoordinates = 1\n    borderColor = MTLSamplerBorderColorTransparentBlack\n    borderColorcustomValue0 = 0\n    borderColorcustomValue1 = 0\n    borderColorcustomValue2 = 0\n    borderColorcustomValue3 = 0\n    forceSeamsOnCubemapFiltering = 0\n    lodMinClamp = 0\n    lodMaxClamp = 3.402823e+38\n    lodAverage = 0\n    compareFunction = MTLCompareFunctionNever\n    supportArgumentBuffers = 0\n    reductionMode = MTLSamplerReductionModeWeightedAverage\n    forceResourceIndex = 0\n    resourceIndex = 0\n    pixelFormat = MTLPixelFormatInvalid.\nSet Vertex Sampler State Validation\nunused vertex binding in render encoder at Sampler index 0.\nSet Vertex Sampler States Validation\nunused vertex binding in render encoder at Sampler index 0.\nunused vertex binding in render encoder at Sampler index 1.\nredundant setting of <MTLDebugSamplerState: 0xADDR> -> <AGXG15XFamilySampler: 0xADDR>\n    label = <none>\n    device = <AGXG15CDevice: 0xADDR>\n        name = Apple M3 Max<MTLSamplerDescriptorInternal: 0xADDR>\n    label = <none>\n    minFilter = MTLSamplerMinMagFilterNearest\n    magFilter = MTLSamplerMinMagFilterNearest\n    mipFilter = MTLSamplerMipFilterNotMipmapped\n    maxAnisotropy = 1\n    sAddressMode = MTLSamplerAddressModeClampToEdge\n    tAddressMode = MTLSamplerAddressModeClampToEdge\n    rAddressMode = MTLSamplerAddressModeClampToEdge\n    normalizedCoordinates = 1\n    borderColor = MTLSamplerBorderColorTransparentBlack\n    borderColorcustomValue0 = 0\n    borderColorcustomValue1 = 0\n    borderColorcustomValue2 = 0\n    borderColorcustomValue3 = 0\n    forceSeamsOnCubemapFiltering = 0\n    lodMinClamp = 0\n    lodMaxClamp = 3.402823e+38\n    lodAverage = 0\n    compareFunction = MTLCompareFunctionNever\n    supportArgumentBuffers = 0\n    reductionMode = MTLSamplerReductionModeWeightedAverage\n    forceResourceIndex = 0\n    resourceIndex = 0\n    pixelFormat = MTLPixelFormatInvalid.\nSet Fragment Sampler State Validation\nunused fragment binding in render encoder at Sampler index 0.\nSet Fragment Sampler States Validation\nunused fragment binding in render encoder at Sampler index 0.\nunused fragment binding in render encoder at Sampler index 1.\nEnd Encoding Validation\nunused vertex binding in render encoder at Texture index 0.\nunused vertex binding in render encoder at Texture index 1.\nunused vertex binding in render encoder at Sampler index 0.\nunused vertex binding in render encoder at Sampler index 1.\nunused fragment binding in render encoder at Sampler index 0.\nunused fragment binding in render encoder at Sampler index 1."
+        }
+      }
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "render-state-unread-slots",
+        "calls": 12,
+        "in_calls": 31835622,
+        "on_cpu": 1043542,
+        "blocked": 30774541,
+        "elsewhere": 7473708,
+        "spend": 39223706,
+        "spend_least": 38601250,
+        "spend_most": 40137166,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 1708,
+            "on_cpu": 1833,
+            "blocked": 0,
+            "wall_least": 1583,
+            "wall_most": 2000,
+            "wall_total": 5583,
+            "on_cpu_total": 5791,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 23910917,
+            "on_cpu": 650708,
+            "blocked": 23260209,
+            "wall_least": 23321291,
+            "wall_most": 24584833,
+            "wall_total": 23910917,
+            "on_cpu_total": 650708,
+            "blocked_total": 23260209
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 416,
+            "on_cpu": 542,
+            "blocked": 0,
+            "wall_least": 375,
+            "wall_most": 667,
+            "wall_total": 416,
+            "on_cpu_total": 542,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 7754917,
+            "on_cpu": 222792,
+            "blocked": 7532125,
+            "wall_least": 7436375,
+            "wall_most": 7865750,
+            "wall_total": 7754917,
+            "on_cpu_total": 222792,
+            "blocked_total": 7532125
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 124625,
+            "on_cpu": 124917,
+            "blocked": 0,
+            "wall_least": 110958,
+            "wall_most": 132583,
+            "wall_total": 124625,
+            "on_cpu_total": 124917,
+            "blocked_total": 0
+          },
+          {
+            "call": "sampler",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 875,
+            "on_cpu": 1000,
+            "blocked": 0,
+            "wall_least": 791,
+            "wall_most": 1000,
+            "wall_total": 5500,
+            "on_cpu_total": 5833,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 29584,
+            "on_cpu": 29708,
+            "blocked": 0,
+            "wall_least": 26583,
+            "wall_most": 33167,
+            "wall_total": 29584,
+            "on_cpu_total": 29708,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_2d_in_role",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 3417,
+            "on_cpu": 3500,
+            "blocked": 0,
+            "wall_least": 3166,
+            "wall_most": 6083,
+            "wall_total": 9834,
+            "on_cpu_total": 10167,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 1792,
+            "on_cpu": 1958,
+            "blocked": 0,
+            "wall_least": 1708,
+            "wall_most": 2041,
+            "wall_total": 1792,
+            "on_cpu_total": 1958,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

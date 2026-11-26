@@ -1,0 +1,33 @@
+# cargo-nextest configuration (https://nexte.st/docs/configuration/).
+#
+# A hung test must never block a gate run: nextest terminates any test still
+# running after 20 minutes and reports it as a timeout. The slowest passing test in the
+# 2026-09-30 gate runs took 334 s (debug, a loaded host), so the limit leaves more than 3x
+# headroom. A test that reaches it is a hang or a regression to diagnose, not a limit to raise.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 20 }
+
+# The ignored `soak_` tests enumerate whole structurizer families and run for up to an hour
+# alone; outside the gate they get two hours.
+[[profile.default.overrides]]
+filter = 'test(/::soak_/)'
+slow-timeout = { period = "300s", terminate-after = 24 }
+
+# The runtime's device test of accesses up to 2 GiB runs alone. Its buffer is one Shared block
+# of `MAX_BUFFER_LENGTH` (2 GiB), host memory where the Shared memory type is the host's (an RTX
+# 2080, NVIDIA 620.70.06). Beside the runtime's compute encoder tests and three other translate
+# tests there, the run's host memory peaked at 4.7 GiB; in a job holding 4 GiB it reached the 4 GiB
+# and another test's Shared block failed with `ERROR_OUT_OF_DEVICE_MEMORY` (one run of two). The
+# same tests without it peaked at 2.4 GiB, and it beside one other test at 2.8 GiB.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-runtime) & test(/::an_access_up_to_2_gib_lands_at_its_own_word$/)'
+threads-required = 'num-test-threads'
+
+# The runtime's device test of its return to its fixed Private memory within a second of going
+# idle runs alone: its premise is an idle device, and a GPU other tests share is not one. Alone on
+# an RTX 3090 (NVIDIA 620.70.06) its gauges were back 264 ms after the release and the test took
+# 0.61 s; beside the other device tests of a 16-thread run on that card they were not back after
+# 1 s, and the test took 8.56 s.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-runtime) & test(/::every_device_returns_to_its_fixed_private_memory_within_a_second_of_going_idle$/)'
+threads-required = 'num-test-threads'

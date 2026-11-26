@@ -1,0 +1,3459 @@
+//! `lower::texture`: image reads, writes, atomics, queries, fences, and null checks.
+//!
+//! **Handles** (`memory::handles`). A texture operand is resolved to its static candidates: a
+//! parameter bound to one `[[texture(n)]]` slot, an element of a texture array, or a handle
+//! selected or merged by a phi from those and the null texture. One candidate is that slot's
+//! binding; several are a switch-at-use on the handle index ([`TextureStrategy::Switch`]), one arm
+//! per slot and a null arm (a read or query is 0, a write dropped, `is_null` true).
+//!
+//! **Heap handles** (`memory::handles`). A texture handle loaded from an argument buffer is a set-1
+//! heap element. The handles `phi`, `select`, and `freeze` merge, and the loads of one
+//! argument-buffer member, form a group ([`HeapPlan`], `memory::handles::HeapGroups`), declared
+//! once, from all of its uses, as one runtime array of the heap class its shape, texel class, and
+//! member access name, like a slot ([`ImageRef::Heap`]). A group that is only queried has no texel
+//! class and is declared `Float`, which its `RuntimeFact::HeapNumericType` states so the binder
+//! reports a resident texture of another numeric type. An operation indexes that array with the
+//! handle, `NonUniform`, and behaves as the static null arm for the null handle (element 0, also
+//! every missed id): a read or query is 0, a write is dropped, `is_null` is `handle == 0`. The
+//! arrays need descriptor indexing (`runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
+//! the class's non-uniform indexing and update-after-bind features), and a storage class formatless
+//! access; without them the group is `Unsupported{ArgumentBufferTextures}` naming what is missing.
+//! A depth texture is read through the float class of its shape, declared without `Depth`, and one
+//! compared anywhere through the depth-comparison class of its shape, declared `Depth`. A heap
+//! texture is sampled through a separate heap sampler (`lower::sampler`); a sampled cube group is a
+//! cube class when it is only sampled. A texture buffer group is a texel-buffer class: a uniform
+//! texel buffer array where its members are read only, a formatless storage texel buffer array
+//! where they are written, each of its numeric type. Heap cube reads, writes, and queries are not
+//! implemented yet.
+//!
+//! **Slots** ([`SlotPlan`]). Every texture slot the function uses is declared once, as one
+//! `OpTypeImage` derived from the typed operand positions of the intrinsics that use it (the ABI
+//! spells no shape, `air::abi`) and the parameter's declared access: `sample`/`read` textures are
+//! sampled images (`Sampled = 1`, format `Unknown`), `write`/`read_write` textures storage images
+//! (`Sampled = 2`) whose format is the slot's `StorageImageChoice` (`LowerInputs`). A cube texture
+//! that is read or written, and every storage cube, is declared as the 2D array the binder views it
+//! as (layer = face + 6 · cube, `RuntimeFact::ImageViewShape`), because Vulkan fetches no cube by
+//! face. Texture buffers are texel buffers (`RuntimeFact::TexelBufferRange`; under the identity
+//! domains, elements of set 1's texel-buffer arrays).
+//!
+//! **Operations.** `read` is `OpImageFetch` on a sampled image and `OpImageRead` on a storage
+//! image; `write` is `OpImageWrite`; `get_*` are `OpImageQuery*`; `fence` is an image memory
+//! barrier; `is_null` reads the slot's `ResourcePresence` specialization constant. Texels move
+//! between the image's 32-bit `vec4` and AIR's held forms: a slot's `half` texels are the device's
+//! texels rounded to nearest even (`PrecisionNote::HalfTexelConversion`; a texture buffer's
+//! included), and a heap element's `half` texels are rounded exactly, half subnormals and the
+//! decoded NaN kept (`narrow::round_texel`; the NaN is the device's decode,
+//! `PrecisionNote::DeviceNanEncoding`), 16-bit integers are held zero-extended and written
+//! sign-extended, and a storage image of class `SwizzleBgra` or `SrgbEncode` converts in the
+//! shader, the latter by the device's sRGB transfer (`PrecisionNote::SrgbTexelDecode` for a read,
+//! `PrecisionNote::DevicePackConversion` for a write).
+//!
+//! **Containment**. A write is discarded out of bounds (Metal's semantics) by a builder-closed
+//! bounds check unless the profile's robustness discards it already (`robustImageAccess`;
+//! `robustBufferAccess2` for texel buffers). A read out of bounds returns Metal's texel, zero with
+//! the pixel format's missing alpha read as 1 ([`ReadCheck`]): the device's under
+//! `robustImageAccess2` (`robustBufferAccess2` for texel buffers), otherwise, under containment,
+//! the shader clamps the level, coordinate, layer, and sample index into the bound image and
+//! selects that texel where one was out of range, its alpha from the slot's `OutOfBoundsAlpha`
+//! specialization when the function observes it (`alpha`). A heap read's alpha is its handle's: the
+//! binder writes the out-of-bounds-alpha flag in the handle-table entry of a texture whose format
+//! has no alpha, and a module with such a read looks handles up in
+//! `memory::handles::Lookup::Flagged`, which carries the flag in the handle's top bit (masked off
+//! before indexing). A cube face or cube index out of range addresses a layer past the 2D-array
+//! view, never another cube's face.
+//!
+//! **Reads through a sampler** (MSL 4.1 §6.13, [`Through`]). Metal 4.1's `read(sampler s, coord
+//! [, offset][, lod])` is addressed by `s`'s state: a constexpr sampler's fields, a runtime
+//! `[[sampler(n)]]`'s word (`SpecKey::SamplerState` with `SamplerWord::READ_STATE`), or an
+//! argument buffer's sampler's table entry. Measured on an Apple M3 Max (macOS 27.0.1, Apple metal
+//! 32023.922, `-std=metal4.1`), each texel naming itself, over 2D (`RGBA32Float`, `RG32Float`,
+//! `R32Float`, `R32Uint`, `RGBA32Uint`, `RGBA32Sint`, `R8Unorm`, `A8Unorm`, `BGRA8Unorm`,
+//! `Depth32Float`, two swizzled views), 2D array, 3D, 1D, `read_write` 2D and texture buffer
+//! textures of one or two levels, through every address mode, border color and mip filter, per axis
+//! and mixed, constexpr, runtime and argument-buffer samplers alike:
+//! - Its level, under a mip filter (nearest or linear alike), is its own; without one, the base
+//!   level. A level past the texture's, or an array layer past its layers, reads zero in every
+//!   lane: not the out-of-bounds texel, whose alpha is the format's, and not through a swizzle.
+//! - Its signed coordinate plus its offset is tested per axis against that level's extent.
+//!   Outside it, an axis whose address mode is `clamp_to_zero` or `clamp_to_border` reads the
+//!   border texel, the sampler's border color (under `clamp_to_zero` too) in the format's channels
+//!   through the texture's swizzle (`metal::sampler::border_texels`), which a slot's
+//!   `BorderTexels` specialization states; every other mode (`clamp_to_edge`, `repeat`,
+//!   `mirrored_repeat`, `mirror_clamp_to_edge`) clamps the index into the level.
+//! - A texture buffer's index outside it is addressed as the first texel of a row past its one row:
+//!   it reads the border texel where the `t` axis's mode is a border mode, else its first texel,
+//!   whatever the `s` and `r` axes' modes; but a runtime `[[sampler(n)]]` whose `s` mode is
+//!   `clamp_to_edge` clamps the index (an argument buffer's sampler's reads as a constexpr one's).
+//!   The axes were told apart through runtime samplers (the conformance family `read_through`),
+//!   constexpr samplers with every axis alike.
+//! - The filters, coordinates, comparison, anisotropy, reduction and LOD clamp change nothing.
+//!
+//! So the level, plane coordinate and layer are addressed before the access, and only a sample
+//! index can be out of bounds as a plain read's, contained as above. A heap element's border
+//! texels are its handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`, the binder's
+//! `border_texels` of the resident texture's format and swizzle), which the read loads from the
+//! entry its handle names (`memory::handles::Lookup::Indexed`), for a constexpr sampler's color
+//! or a runtime or argument-buffer sampler's word's alike. A `ulong` texel's border is not
+//! implemented. A cube's read through a sampler (unclamped on the M3), a sparse one's (its
+//! residency unmeasured) and a `read_write` texture's at a computed level (Metal 4.1 has no such
+//! overload) are refused.
+//!
+//! **Storage levels**. A storage access reaches its view's base level only
+//! (`OpImageRead`/`OpImageWrite` take no `Lod`). A storage slot that is read or written at a level
+//! other than the constant 0 is declared as an array of `N` storage images, `N` the most levels a
+//! texture of its type can have on the device (`⌊log2 maxImageDimension⌋ + 1`), which the binder
+//! fills with single-level views of the bound texture's levels and neutrals
+//! past them (`RuntimeFact::StorageTextureLevelViews`). Every access of such a slot indexes the
+//! array: by a constant level below `N` as is (the neutral where the texture lacks that level),
+//! else by the level clamped below the bound texture's level count (`PushField::TextureLevels`,
+//! `RuntimeFact::StorageTextureLevels`), a `NonUniform` index. A read or write at a level the
+//! texture lacks is out of bounds (MSL 4.1 §6.13): Metal ignores the write, and the write is
+//! dropped; Metal reads zero components (alpha 1 where the format has none), and the read selects
+//! that texel on every profile, whatever the device's robustness, since the element it read is
+//! another level or a neutral (the out-of-bounds texel, its alpha from the slot's
+//! `OutOfBoundsAlpha` where the function observes it). `get_num_mip_levels` of a storage texture
+//! is the pushed count, 0 for a neutral; of a 1D
+//! texture or 1D texture array, sampled or storage, always 0 (Metal has no mipmapped 1D
+//! textures). Heap storage images take only the constant 0, and a
+//! texture atomic on a slot with level views is not implemented.
+//!
+//! Under the identity domains the level views are no array of the slot's own: they are a run of
+//! the set-1 storage array, each element a single-level view of the bound texture's level, in
+//! order from its first, and the consumer pushes the run's first element
+//! (`PushField::TextureLevelBase`) beside the level count, with no fact. An access at level `l`
+//! takes element `first + min(l, max(n, 1) − 1)` within the `l < n` check, `NonUniform` where `l`
+//! is not a constant, and the level 0 the first element. A texture of one level is its own run
+//! (its resource ID's element), and nil's run is element 0, the null descriptor, of count 0.
+//!
+//! **Size queries at a level** (`emit::level_extent`). A width, height, or depth query at a level
+//! that is not the constant 0, of a sampled or storage texture, answers Metal's
+//! `max(1, e >> (l & 255))` of the extent `e` of the texture's first level, at every level `l`,
+//! past its level count too: it queries no other level, so a storage slot needs no level views
+//! for it. A heap storage element's query takes only the constant 0, as its other accesses.
+//!
+//! **Sampling.** Samples, gathers, and LOD queries take a sampler: they are the sampler family's
+//! (`lower::sampler`), selected here once the texture's candidates are known, as
+//! [`TextureStrategy::Sampling`] (or a switch of them).
+//!
+//! **Status words** (`status`). A `{T, i8}` result's status word is Metal's residency status: bit 0
+//! set when the access touched a texel that is not resident, the only bit MSL reads
+//! (`sparse_color::resident()`). A word nothing observes is built as 0; its texel may be taken
+//! through `phi`, `select`, and `freeze` copies of the whole result. A word whose effects depend on
+//! bit 0 alone (`status::observed`'s demanded bits) is lowered on a slot: a texture that is not
+//! sparse is resident everywhere, so its word is 0 on every device; a sparse one's is its sparse
+//! access's (`OpImageSparse*`, `OpImageSparseTexelsResident`), in an arm the slot's `SparseTexture`
+//! specialization selects (`RuntimeFact::SparseTexture`), compiled where the profile enables
+//! `shaderResourceResidency` and the slot's accesses all have a sparse form. Elsewhere the binder
+//! refuses a sparse texture at the slot. The artifact notes `PrecisionNote::SparseResidency`. A
+//! word with another bit observed, or a whole `{T, i8}` value exposed, is refused.
+//!
+//! **Atomics** (`atomic`). `atomic_fetch_max` is `OpAtomic{U,S}Max` on the texel pointer of an
+//! `R32ui` / `R32i` storage image; only lane 0 of its result may be read.
+//!
+//! **The nil arm** (`absent`). The code a shader keeps for an `is_null` of a static slot that
+//! says its texture is nil is kept, exact for a nil texture; the default (all-present)
+//! specialization never runs it. The census counts its words under [`ABSENT_ARM`], so the
+//! output-size gate can except exactly them; nothing emitted changes.
+//!
+//! A heap element's observed residency is 0 in its word, Metal's for a texture that is not sparse:
+//! the stage states `RuntimeFact::HeapResidency`, and the binder refuses a sparse texture its
+//! handle tables reach (answering one would need its tile map or sparse image per handle-table
+//! entry).
+//!
+//! Not lowered yet (`Unsupported{Lowering(Texture), NotImplemented}`): reads, writes, and level
+//! counts of a heap storage image at a level other than the constant 0, and read offsets.
+
+mod absent;
+mod alpha;
+mod atomic;
+mod cooperative;
+mod emit;
+pub(crate) mod heap_raw;
+mod slice;
+mod slot;
+mod status;
+
+pub(crate) use absent::absent_arm;
+pub use absent::ABSENT_ARM;
+pub use atomic::TexAtomic;
+pub(crate) use emit::{
+    constant_lanes, dispatch, heap_element, heap_flags, heap_raw_form, heap_raw_image,
+    live_or_zero, reinterpret, resident_access, rgb9e5_word, slot_image, sparse_spec, srgb_raw_tap,
+    srgb_texel, swizzled_float, swizzled_gather, swizzled_held, tile_map, tiled_word, with_word,
+    NullLeaf, TileLevel, SRGB_DECODE_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
+};
+pub use emit::{emit, held_texel, to_image};
+pub(crate) use slot::depth_comparison;
+pub use status::StatusUse;
+
+use crate::lower::access::handle::HandleTarget;
+use crate::memory::handles::{Candidate, HeapGroups};
+use crate::pipeline::lower_inputs::StorageImageClass;
+use crate::pipeline::sym::{ImageAccess, ImageHandleClass};
+#[cfg(test)]
+pub use slot::max_levels;
+pub use slot::{
+    finish, heap_layout_features, HeapPlan, ImageDecl, ReadCheck, SlotPlan, TexelClass,
+};
+pub(crate) use slot::{identity_class, image_class};
+use std::borrow::Cow;
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::air::abi::{AbiInt, Access as AbiAccess, ParamBinding, ParamRole};
+use crate::air::intrinsics::{
+    AirIntrinsic, AtomicOp, Elem, ImageDim, ImageShape, Layout, Query, SamplerOp, Sign, TexOp,
+    TexRole,
+};
+use crate::air::ir::{Callee, Const, Inst, InstId, InstKind, Value, ValueId};
+use crate::budget::Meter;
+use crate::error::{Error, Feature, LowerFamily, Unsupported};
+use crate::lower::arith::{FloatFmt, Form, Held};
+use crate::lower::emit::EmitCx;
+use crate::lower::sampler::Sampling;
+use crate::lower::select::{FamilyPlans, NoteClause, NoteOn, NoteTest, Plan, SelectCx};
+use crate::lower::strategy::FamilyStrategy;
+use crate::pipeline::artifact::PrecisionNote;
+use crate::pipeline::sym::{SampledType, SlotClass, SlotRef};
+use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
+use crate::spirv::error::BResult;
+use crate::spirv::ids::{DemoteTy, FuncId, GlobalId, TypeId, Value as SValue};
+use crate::spirv::ir::{ConstBits, ExecMode, Type as SType};
+
+fn refuse() -> Error {
+    Unsupported::not_implemented(Feature::Lowering(LowerFamily::Texture)).into()
+}
+
+/// How a texel moves between the image's 32-bit `vec4` and AIR's held value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TexelConv {
+    /// `float`: as is.
+    F32,
+    /// `half`, held widened: rounded exactly when read, half subnormals and the decoded NaN kept
+    /// (`narrow::round_texel`).
+    F16,
+    /// A 32-bit integer, held in a `u32`: bitcast.
+    I32,
+    /// A 16-bit integer, held zero-extended in a `u32`: masked to 16 bits when read, and
+    /// sign-extended when written to a signed image (an out-of-range integer texel is undefined
+    /// in Vulkan).
+    I16 { signed: bool },
+    /// Metal's `ulong` texel as the two 32-bit words of an `RG32` image texel, the low word in R
+    /// (measured on Apple M3 Max): a read is `(R | G << 32, 0, 0, 1)` (Metal's lanes, the same out
+    /// of bounds, where R and G are 0), and a write stores lane 0's low word in R and its high word
+    /// in G. Held in `u64`s, or, `wide` on a profile without `shaderInt64`, as the low words' and
+    /// the high words' `uvec4`s.
+    U64Words { wide: bool },
+}
+
+/// The texel an operation reads or writes: its conversion and lane count (4, or 1 for a depth
+/// read).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexelForm {
+    pub conv: TexelConv,
+    pub lanes: u8,
+}
+
+impl TexelForm {
+    /// The held form of this texel's lanes as `half`s.
+    pub fn half(self) -> Form {
+        Form {
+            held: Held::Float(FloatFmt::Half),
+            lanes: self.lanes,
+        }
+    }
+
+    /// The estimated words of converting an image texel to this form ([`held_texel`]) beyond a
+    /// strategy's base words: a `half`'s exact rounding.
+    pub fn read_words(self) -> u32 {
+        match self.conv {
+            TexelConv::F16 => crate::lower::arith::narrow::round_texel_words(self.half()),
+            _ => 0,
+        }
+    }
+}
+
+/// An image coordinate: the plane coordinate (a held `u32` or `uvecN`), and the array layer or
+/// cube face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Coord {
+    pub plane: ValueId,
+    /// The number of plane components.
+    pub lanes: u8,
+    pub layer: Option<ValueId>,
+    pub face: Option<ValueId>,
+}
+
+/// The image an operation reads, writes, or queries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ImageRef {
+    /// The texture slot `[[texture(n)]]`.
+    Slot(u32),
+    /// Element `handle` (a heap handle's value) of the heap array of heap group `group`.
+    Heap { group: u32, handle: ValueId },
+}
+
+impl ImageRef {
+    pub(crate) fn heap(&self) -> bool {
+        matches!(self, ImageRef::Heap { .. })
+    }
+}
+
+/// A `read`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Read {
+    pub image: ImageRef,
+    pub at: Coord,
+    /// The level of a sampled, single-sampled, non-buffer image; of a storage slot, the level of
+    /// its level views when it is not the constant 0.
+    pub level: Option<ValueId>,
+    /// `level` indexes the slot's level views: past the bound level count the read selects Metal's
+    /// out-of-bounds texel on every profile, whatever its [`ReadCheck`].
+    pub level_views: bool,
+    /// The sample index of a multisampled image.
+    pub sample: Option<ValueId>,
+    pub texel: TexelForm,
+    /// The result is `{T, i8}`, with this lowered type.
+    pub result: DemoteTy,
+    /// The function observes bit 0 of the result's status word: on a slot with a sparse arm the
+    /// word is the sparse read's under the slot's `SparseTexture` specialization; otherwise it is
+    /// 0, a texture that is not sparse being resident everywhere.
+    pub residency: bool,
+    /// How an out-of-bounds read returns Metal's texel.
+    pub check: ReadCheck,
+    /// Where the shader selects the out-of-bounds texel (under [`ReadCheck::Shader`], or past a
+    /// level-view read's level count), its alpha is the bound format's (the function observes
+    /// the alpha): a slot's `OutOfBoundsAlpha` specialization, or a heap element's
+    /// out-of-bounds-alpha flag, which its handle carries; otherwise it is 0.
+    pub alpha: bool,
+    /// A Metal 4.1 read through a sampler ([`Through`]).
+    pub through: Option<Through>,
+    /// The read takes an 8-bit sRGB texel's codes from its slot's image, which holds the format's
+    /// UNORM twin (`LoweringInputs::srgb_textures`), and decodes them by the device's transfer
+    /// (`emit::srgb_texel`, `RuntimeFact::SrgbTexture`).
+    pub raw: bool,
+    /// The read, of a storage slot whose class is `SrgbEncode`, takes the codes of an 8-bit sRGB
+    /// format from its UNORM alias and decodes them by the device's transfer
+    /// (`emit::srgb_texel`).
+    pub srgb_codes: bool,
+    /// The read, of a texture buffer slot, applies the bound texture buffer's swizzle to its
+    /// texel, an out-of-bounds texel included, under the slot's `TextureSwizzle` specialization
+    /// (`RuntimeFact::TextureSwizzle`).
+    pub swizzle: bool,
+    /// The read, of a storage slot of `LoweringInputs::swizzled_storage`, applies the bound
+    /// texture's swizzle to its held texel, after converting it (an out-of-bounds texel
+    /// included), under the slot's `TextureSwizzle` specialization; so does a read of an
+    /// extended-range sampled slot of it, after decoding the texel, and of a packed normalized
+    /// sampled slot of it, after converting the texel by its class.
+    pub storage_swizzle: bool,
+    /// The slot's variant binds a texture of this extended-range format: the read decodes the
+    /// raw texel ([`extended_range::decode`](crate::lower::arith::extended_range::decode)), and
+    /// selects Metal's out-of-bounds texel (zero, alpha the format's) in the shader.
+    pub extended: Option<crate::metal::format::ExtendedRange>,
+    /// The read, of a sampled float heap group, decodes a member of a form a heap reads where
+    /// the handle's class index names one (`heap_raw`): its raw texel fetched from the group's
+    /// unsigned integer class (`HeapPlan::raw`), in place of the float array's neutral.
+    pub heap_raw: bool,
+    /// The read, of a storage heap group, takes Metal's texel `(0, 0, 0, r)` from the image's red
+    /// where the handle's class index is `A8Unorm`'s, on a device that holds such a texture's alpha
+    /// in red ([`heap_alpha_in_red`]).
+    pub heap_alpha_red: bool,
+    /// The read, of a storage heap group, exchanges red and blue and decodes 8-bit sRGB codes
+    /// where the handle's class and red-blue order name a member the heap views through its
+    /// storage choice's alias ([`heap_storage_conversions`]).
+    pub heap_conversions: HeapConversions,
+    /// The read, of a storage heap group on a device that reads storage without a format by the
+    /// formats' own bits alone ([`heap_unreadable`]), reads the null element where the handle
+    /// carries `memory::handles::FLAG_STORAGE_UNREADABLE`: its member's view lacks the read bit,
+    /// so it reads as a nil texture's read does.
+    pub heap_unreadable: bool,
+    /// The read, of a slot's color texture on a profile whose sparse textures are sparse images
+    /// (it enables `shaderResourceResidency`), sets the lanes Metal reads as constants (a channel
+    /// the format lacks, through the swizzle) after it, from the slot's `ConstantLanes`
+    /// specialization: a block of a sparse image that holds no mapped tile reads the device's
+    /// value (RADV's alpha 0), where Metal reads them as constants.
+    pub constant_lanes: bool,
+    /// The slot's variant binds a texture of another numeric class
+    /// (`LoweringInputs::cross_class`): [`texel`](Self::texel) is that class's own result
+    /// ([`native_form`]), whose words the read hands back as this declared conversion
+    /// (`emit::reinterpret`).
+    pub declared: Option<TexelConv>,
+    /// The read, a sibling of a heap read ([`Read::heap_cross`]), reads the member in this other
+    /// numeric class: through the group's array of that class (`HeapPlan::cross`), its
+    /// [`texel`](Self::texel) that class's own result, handed back as
+    /// [`declared`](Self::declared).
+    pub heap_class: Option<TexelClass>,
+    /// The read, of a sampled color heap group of one sample, reads a member of another numeric
+    /// class than its own in that class where the handle's class index names one
+    /// (`metal::texel_format::heap_numeric_base`, or a float format's own class): one sibling
+    /// read per other class, the read itself for every other member. A `half` read's arms merge
+    /// the texel's `half` bits, widened once after the merge (`emit::read_crossed`).
+    pub heap_cross: Vec<Read>,
+}
+
+/// The estimated words of a storage heap read's unreadable guard ([`Read::heap_unreadable`]): the
+/// flag's test and the element's select, with the entry's flags where the handle carries its
+/// entry's index (`memory::handles::INDEXED_FLAGS_WORDS`).
+pub(crate) const HEAP_UNREADABLE_WORDS: u32 = 24 + crate::memory::handles::INDEXED_FLAGS_WORDS;
+
+/// The estimated words of read `r`: coordinate assembly, the access, the texel conversion, and the
+/// status composite; the clamps, the in-bounds test, and the out-of-bounds select (with its
+/// specialized alpha); the level views' count, index clamp, level test, and select; a heap
+/// element's access chain, load, and null select or guard, and a storage one's unreadable guard;
+/// the sparse arm ([`RESIDENCY_WORDS`]) and
+/// the word's select outside the image, with its own in-bounds test where the shader has none; a
+/// read through a sampler's addressing ([`Through::words`]), and a heap element's border texels
+/// and the flags its uses then read from its handle-table entry
+/// (`memory::handles::INDEXED_FLAGS_WORDS`); a `half` texel's exact rounding, or an sRGB texel's
+/// raw decode; the lanes Metal reads as constants; the
+/// reinterpretation of another class's words; and each sibling of a heap read with its class test
+/// and branch, and a `half` read's merge of its arms' bits.
+fn read_words(r: &Read) -> u32 {
+    let own = 64
+        + if r.checked() { 80 } else { 0 }
+        + if r.constant_lanes {
+            crate::lower::sampler::CONSTANT_LANES_WORDS
+        } else {
+            0
+        }
+        + if r.residency {
+            RESIDENCY_WORDS + if r.checked() { 8 } else { 48 }
+        } else {
+            0
+        }
+        + if r.alpha { 12 } else { 0 }
+        + if r.level_views { 48 } else { 0 }
+        + if r.image.heap() { 32 } else { 0 }
+        + if r.heap_raw { heap_raw::READ_WORDS } else { 0 }
+        + if r.heap_alpha_red {
+            emit::HEAP_ALPHA_IN_RED_WORDS
+        } else {
+            0
+        }
+        + r.heap_conversions.words(true)
+        + if r.heap_unreadable {
+            HEAP_UNREADABLE_WORDS
+        } else {
+            0
+        }
+        + r.through.map_or(0, Through::words)
+        + match r.through {
+            Some(t) if r.image.heap() && t.sampler.bordered() => {
+                2 * crate::memory::handles::INDEXED_FLAGS_WORDS
+            }
+            _ => 0,
+        }
+        + if r.raw || r.srgb_codes {
+            SRGB_DECODE_WORDS
+        } else if r.extended.is_some() {
+            crate::lower::arith::extended_range::DECODE_WORDS + r.texel.read_words()
+        } else {
+            r.texel.read_words()
+        };
+    let declared = if r.declared.is_some() { 16 } else { 0 };
+    let siblings: u32 = r.heap_cross.iter().map(|x| read_words(x) + 24).sum();
+    // A `half` read with siblings merges its arms' bits (`emit::read_crossed`): each arm's
+    // narrowing (or its noted bits' mask) and null select, and one widening after the merge.
+    let half_bits = match (r.heap_cross.len() as u32, r.texel.conv) {
+        (0, _) => 0,
+        (n, TexelConv::F16) => {
+            let lanes =
+                u32::from(r.texel.lanes) * crate::lower::arith::narrow::bits_words(r.texel.half());
+            (n + 1) * (lanes + 32) + lanes
+        }
+        _ => 0,
+    };
+    own + declared + siblings + half_bits
+}
+
+/// A Metal 4.1 `read(sampler s, ...)` (MSL 4.1 §6.13), measured on the M3 Max (macOS 27.0.1,
+/// module docs): its signed plane coordinate, plus `offset` where it has one, is addressed by
+/// `sampler`'s state at the level it reads ([`ReadSampler`]); a level or layer outside the image
+/// reads zero in every lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Through {
+    /// The per-component offset (2D, 2D array, and 3D; Metal requires `-8..=7`), where not zero.
+    pub offset: Option<ValueId>,
+    pub sampler: ReadSampler,
+}
+
+/// The sampler state a read through a sampler addresses by: per plane axis (`s`, `t`, `r`)
+/// whether an index outside the level reads the border texel (`clamp_to_zero` and
+/// `clamp_to_border`) or the edge (every other mode), the border color, and whether it has a mip
+/// filter, which reads at the read's level rather than the base level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadSampler {
+    /// A constexpr sampler's state; `color` is `MTLSamplerBorderColor`'s value.
+    Constant {
+        border: [bool; 3],
+        color: u32,
+        mip: bool,
+    },
+    /// Runtime sampler slot `n`'s word, its `SamplerState` specialization
+    /// (`lower::sampler::RuntimeSlot::reads`).
+    Slot(u32),
+    /// An argument buffer's sampler, by its handle's value: its sampler table entry's word.
+    Heap(ValueId),
+}
+
+impl Through {
+    /// The estimated words a read through a sampler adds to a plain read: the level's test and
+    /// choice, the size query, the offset, the signed clamp and each lane's test, the zero
+    /// texel's selection; a runtime sampler's word fields; and where it may read the border, the
+    /// border texel's lanes and their selection.
+    pub fn words(self) -> u32 {
+        let state = match self.sampler {
+            ReadSampler::Constant { .. } => 0,
+            ReadSampler::Slot(_) => 40,
+            ReadSampler::Heap(_) => 40 + crate::memory::handles::ENTRY_FIELD_WORDS,
+        };
+        let border = if self.sampler.bordered() { 64 } else { 0 };
+        96 + state + border
+    }
+}
+
+impl ReadSampler {
+    /// Whether an index outside the level may read the border texel.
+    pub fn bordered(self) -> bool {
+        match self {
+            ReadSampler::Constant { border, .. } => border.contains(&true),
+            ReadSampler::Slot(_) | ReadSampler::Heap(_) => true,
+        }
+    }
+}
+
+impl Read {
+    /// The shader clamps the read and selects Metal's out-of-bounds texel.
+    pub(crate) fn checked(&self) -> bool {
+        self.check == ReadCheck::Shader
+    }
+}
+
+/// A `write`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Write {
+    pub image: ImageRef,
+    pub at: Coord,
+    /// The level of the slot's level views when it is not the constant 0.
+    pub level: Option<ValueId>,
+    pub value: ValueId,
+    pub texel: TexelForm,
+    /// Discard an out-of-bounds write in the shader (no robustness discards it).
+    pub guard: bool,
+    /// The slot's variant binds a texture of this extended-range format: the write encodes the
+    /// raw texel ([`extended_range::encode`](crate::lower::arith::extended_range::encode)).
+    pub extended: Option<crate::metal::format::ExtendedRange>,
+    /// The slot's storage class ([`storage_class`]): a converting one moves or encodes the
+    /// written channels (`RotateArgb`'s rotation, `SrgbEncode`'s codes).
+    pub class: StorageImageClass,
+    /// A `float` or `half` texel written through a heap handle stores its alpha in the image's
+    /// red where the handle's class index is `A8Unorm`'s, on a device that holds such a texture's
+    /// alpha in red ([`heap_alpha_in_red`]).
+    pub heap_alpha_red: bool,
+    /// A `float` or `half` texel written through a heap handle encodes 8-bit sRGB codes and
+    /// exchanges red and blue where the handle's class and red-blue order name a member the heap
+    /// views through its storage choice's alias ([`heap_storage_conversions`]).
+    pub heap_conversions: HeapConversions,
+    /// The slot is one of `LoweringInputs::swizzled_storage`: the write undoes the bound
+    /// texture's swizzle on its held value, before converting it, under the slot's
+    /// `TextureSwizzle` specialization (`emit::unswizzled`).
+    pub swizzle: bool,
+    /// The slot's variant binds a texture of another numeric class
+    /// (`LoweringInputs::cross_class`): `texel` is that class's own form
+    /// ([`native_write_form`]), into which the write first turns the declared lanes
+    /// (`emit::cross_write`).
+    pub cross: Option<CrossWrite>,
+    /// How an integer texel's lanes are saturated to the bound format's channels ([`int_range`]).
+    pub saturate: IntRange,
+}
+
+/// A write's declared texel and the bound format of a texture of another numeric class
+/// ([`Write::cross`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CrossWrite {
+    /// The conversion of the texel the function writes.
+    pub declared: TexelConv,
+    /// The format the slot's storage choice declares, the bound texture's.
+    pub format: crate::vk::Format,
+}
+
+/// How an integer texel's write saturates each lane to its channel's range, as the image's
+/// signedness reads the 32-bit word (`emit::saturated`): Metal stores the nearest value the
+/// channel holds (`uint` 300 into `R8Uint` stores 255, `int` -200 into `R8Sint` -128), where a
+/// Vulkan write of a value the format cannot represent is undefined.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IntRange {
+    /// Not an integer texel's write, or every channel holds the written word: stored as it is.
+    Full,
+    /// The width of each channel (red to alpha) of the format the slot's storage choice declares.
+    Widths([u32; 4]),
+    /// A slot whose storage choice declares no format: the widths the binder pushes for the
+    /// bound texture (`PushField::TextureIntegerChannels`).
+    SlotWord(SlotRef),
+}
+
+impl IntRange {
+    /// The words of the saturation: a clamp against constants, or the word's load, the bounds'
+    /// derivation and the clamp.
+    pub(crate) fn words(self) -> u32 {
+        match self {
+            IntRange::Full => 0,
+            IntRange::Widths(_) => 24,
+            IntRange::SlotWord(_) => 24 + 48,
+        }
+    }
+}
+
+/// What a `get_*` query reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum QueryKind {
+    /// Component `component` of the image size (width 0, height 1, depth 2).
+    Size {
+        component: u8,
+    },
+    /// The number of array elements (cubes of a cube array).
+    ArraySize,
+    Levels,
+    /// A 1D texture's or 1D texture array's level count: always 0 (Metal has no mipmapped 1D
+    /// textures).
+    NoLevels,
+    Samples,
+}
+
+/// A `get_*` query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryOp {
+    pub image: ImageRef,
+    pub kind: QueryKind,
+    /// The level of a size query of a single-sampled image other than a texel buffer, sampled or
+    /// storage, when it is not the constant 0: the query answers from the image's first level
+    /// (`emit::level_extent`).
+    pub level: Option<ValueId>,
+    /// The query, of a sampled heap group, queries a member of a form a heap reads where the
+    /// handle's class index names one through the group's unsigned integer class
+    /// (`HeapPlan::raw`), which holds it, in place of the float array's neutral.
+    pub heap_raw: bool,
+    /// The query, of a sampled color heap group of one sample, queries a member of another
+    /// numeric class through the group's array of that class (`HeapPlan::cross`) where the
+    /// handle's class index names one.
+    pub heap_cross: bool,
+    /// The query is of a slot whose variant binds a two-plane extended-range 3D texture, whose
+    /// depth and level count Metal answers otherwise (`emit::planes_volume`).
+    pub volume: bool,
+}
+
+/// The texture strategies.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TextureStrategy {
+    Read(Read),
+    Write(Write),
+    /// A texture atomic.
+    Atomic(TexAtomic),
+    Query(QueryOp),
+    /// `fence`: an image memory barrier.
+    Fence,
+    /// `is_null`: the negated `ResourcePresence` of the slot.
+    IsNull {
+        index: u32,
+    },
+    /// `is_null` of a heap handle: the handle is the null (neutral) element.
+    HeapIsNull {
+        handle: ValueId,
+    },
+    /// A sample, gather, or LOD query: the sampler family's.
+    Sampling(Box<crate::lower::sampler::Sampling>),
+    /// `get_null_texture`: the null handle (`memory::handles`).
+    NullHandle,
+    /// An operation on a multi-candidate texture or sampler: a switch-at-use over the
+    /// candidates.
+    Switch(Box<Switch>),
+    /// A slice write of the kernel's imageblock.
+    ImageblockSlice(Box<slice::Slice>),
+    /// A sample of a texture slot bound in an extended-range format, emulated by fetches of its
+    /// raw texels (`sampler::extended`).
+    ExtendedSample(Box<crate::lower::sampler::extended::Sample>),
+    /// An operation on the absent handle: a texture or sampler a function constant removed
+    /// (`memory::handles::Candidate::Absent`).
+    AbsentArgument(AbsentArgument),
+}
+
+/// An operation on the absent handle, alone or as a switch-at-use's arm. Metal gives a read through
+/// a removed texture or sampler no value, so a read, query, sample, gather, atomic, or `is_null` is
+/// the absent read: it yields zero. A write or fence of a removed texture is dropped, as Metal
+/// drops one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AbsentArgument {
+    /// What it yields: zero of its result's lowered type, or nothing.
+    pub value: NullArm,
+}
+
+impl AbsentArgument {
+    /// The census name.
+    const NAME: &'static str = "texture.absent_argument";
+
+    /// The absent operation of call `at` (`inst`).
+    pub(crate) fn select(
+        cx: &mut SelectCx<'_>,
+        at: InstId,
+        inst: &Inst,
+    ) -> Result<TextureStrategy, Error> {
+        let value = match cx.entry.module.types().get(inst.ty) {
+            Some(crate::air::ir::Type::Void) | None => NullArm::Nothing,
+            _ => NullArm::Zero(cx.lowered_repr(Value::Inst(at), inst.ty)?),
+        };
+        Ok(TextureStrategy::AbsentArgument(AbsentArgument { value }))
+    }
+}
+
+/// What the null arm of a switch-at-use yields: Metal's null texture reads and samples 0, drops
+/// writes, and is null (the value is ours, Metal's is open question Q7).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NullArm {
+    /// The zero value of the result's lowered type.
+    Zero(DemoteTy),
+    /// `true` (`is_null`).
+    True,
+    /// No value (a write).
+    Nothing,
+}
+
+/// An operation on a texture or sampler with several static candidates: nested switches-at-use on
+/// each handle, one arm per candidate combination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Switch {
+    /// The handle indices dispatched on, outermost first (the texture's, then the sampler's).
+    pub handles: Vec<ValueId>,
+    /// Each arm: its case literal per handle (the candidates' handle indices), and the
+    /// operation on that candidate combination, a static-slot strategy.
+    pub arms: Vec<(Vec<u32>, TextureStrategy)>,
+    pub null: NullArm,
+    /// What the switch computes before it dispatches, in the use's own position.
+    pub prelude: Prelude,
+}
+
+/// What a switch-at-use computes before its dispatch, in the use's own position, so that no
+/// tangled instruction lies inside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prelude {
+    /// Nothing: no arm is tangled.
+    Nothing,
+    /// The implicit-LOD sample's gradients, which its sampling arms read.
+    Gradients(crate::lower::sampler::Hoist),
+    /// Every arm's value, a fragment LOD query (which has no gradient form), each candidate's query
+    /// at the call's own position with the call's coordinate; the dispatch selects the handles'
+    /// one.
+    Arms,
+}
+
+impl Switch {
+    /// The census name of the switch: its arms' operation, with the check they take. The arms are
+    /// one operation selected for one image shape on different candidates, so they take one check
+    /// (`slot::read_check` and `slot::write_guard` read only the profile and the shape, a query's
+    /// clamp its level operand), which the first arm names: a texel buffer's clamp or guard follows
+    /// the buffer encoding and an image's the image encoding, so without it a read switch over
+    /// texel buffers and one over images were one name under one coverage key.
+    fn name(&self) -> Cow<'static, str> {
+        let hoisted = matches!(self.prelude, Prelude::Gradients(_));
+        Cow::Borrowed(match self.arms.first().map(|(_, s)| s) {
+            Some(TextureStrategy::Read(r)) if r.checked() => "texture.read_clamped.switch",
+            Some(TextureStrategy::Read(_)) => "texture.read.switch",
+            Some(TextureStrategy::Write(w)) if w.guard => "texture.write_guarded.switch",
+            Some(TextureStrategy::Write(_)) => "texture.write.switch",
+            Some(TextureStrategy::Atomic(a)) => return Cow::Owned(format!("{}.switch", a.name())),
+            Some(TextureStrategy::Query(q)) if q.level.is_some() => "texture.query_level.switch",
+            Some(TextureStrategy::Query(_)) => "texture.query.switch",
+            Some(TextureStrategy::IsNull { .. }) => "texture.is_null.switch",
+            Some(TextureStrategy::Sampling(_)) if hoisted => "sampler.sample_hoisted_grad.switch",
+            Some(TextureStrategy::Sampling(_)) if self.prelude == Prelude::Arms => {
+                "sampler.query_lod.switch"
+            }
+            Some(TextureStrategy::Sampling(_)) => "sampler.sample.switch",
+            Some(TextureStrategy::AbsentArgument(_)) => "texture.absent_argument.switch",
+            _ => "texture.null.switch",
+        })
+    }
+
+    /// The arms' sampling where the switch emulates once (SEMANTICS 1012): two or more arms, each
+    /// the same emulated sampling ([`Sampling::shared_shape`]) on its own texture slot, and no LOD
+    /// query evaluated before the dispatch. The emulation then runs once, outside the dispatch, and
+    /// each arm reads only its own image: its size, its format's bits, its taps, and the device's
+    /// access (`sampler::shared_value`).
+    pub(crate) fn shared(&self) -> Option<Vec<(&[u32], &Sampling)>> {
+        if self.prelude == Prelude::Arms || self.arms.len() < 2 {
+            return None;
+        }
+        let mut out = Vec::with_capacity(self.arms.len());
+        let mut shape: Option<Sampling> = None;
+        for (lits, s) in &self.arms {
+            let TextureStrategy::Sampling(x) = s else {
+                return None;
+            };
+            let k = x.shared_shape()?;
+            match &shape {
+                None => shape = Some(k),
+                Some(first) if *first == k => {}
+                Some(_) => return None,
+            }
+            out.push((lits.as_slice(), x.as_ref()));
+        }
+        Some(out)
+    }
+
+    fn words(&self) -> u32 {
+        // The hoisted derivatives, and with a bias their scaling (`bias_gradients`). Arms evaluated
+        // first are the arms' words, each selected by a phi operand.
+        let hoist = match &self.prelude {
+            Prelude::Nothing | Prelude::Arms => 0,
+            Prelude::Gradients(h) if h.bias.is_some() => crate::lower::sampler::BIAS_GRADIENT_WORDS,
+            Prelude::Gradients(_) => 32,
+        };
+        // The shared form (SEMANTICS 1012): the emulation once, and per arm its image's reads.
+        if let Some(arms) = self.shared() {
+            let (once, per_arm) = arms
+                .first()
+                .map_or((0, 0), |(_, s)| (s.words(), s.shared_arm_words()));
+            return once
+                .saturating_add(per_arm.saturating_mul(arms.len() as u32))
+                .saturating_add(crate::lower::sampler::SHARED_WORDS)
+                .saturating_add(hoist);
+        }
+        let arms = self.arms.iter().fold(0u32, |n, (_, s)| {
+            n.saturating_add(s.words()).saturating_add(8)
+        });
+        arms.saturating_add(24).saturating_add(hoist)
+    }
+}
+
+impl FamilyStrategy for TextureStrategy {
+    /// A read, write, atomic, or query names the in-shader check it takes (`_clamped`,
+    /// `_guarded`) on a slot, a heap element (`.heap`), or a switch's arms (`.switch`); a read or
+    /// sampling operation whose status word the function observes adds `.resident`.
+    fn name(&self, _: &FamilyPlans) -> Cow<'static, str> {
+        let name = self.base_name();
+        if self.residency() {
+            Cow::Owned(format!("{name}.resident"))
+        } else {
+            name
+        }
+    }
+
+    fn words(&self) -> u32 {
+        self.base_words()
+    }
+}
+
+impl TextureStrategy {
+    /// The sampled images of combined bindings this strategy makes: its own sampling's, or its
+    /// switch's arms' (each the static sampling of one binding). Under the separate form each is
+    /// made from the separate texture and sampler. A sampling makes one in its open block. A switch
+    /// that emulates once ([`Switch::shared`], SEMANTICS 1012) makes none: its bicubic taps read
+    /// each arm's image alone.
+    pub fn combined_samplings(&self) -> u32 {
+        match self {
+            TextureStrategy::Sampling(s) => match s.source {
+                crate::lower::sampler::Source::Combined(_) => 1,
+                _ => 0,
+            },
+            TextureStrategy::Switch(w) => match w.shared() {
+                Some(_) => 0,
+                None => w
+                    .arms
+                    .iter()
+                    .fold(0, |n, (_, a)| n.saturating_add(a.combined_samplings())),
+            },
+            _ => 0,
+        }
+    }
+
+    /// Whether the function observes the status word of this operation (or of a switch's arm):
+    /// its residency.
+    fn residency(&self) -> bool {
+        match self {
+            TextureStrategy::Read(r) => r.residency,
+            TextureStrategy::Sampling(s) => s.residency,
+            TextureStrategy::Switch(s) => s.arms.iter().any(|(_, a)| a.residency()),
+            _ => false,
+        }
+    }
+
+    /// The census name without the residency suffix.
+    fn base_name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(match self {
+            TextureStrategy::Read(r) if r.image.heap() && r.checked() => {
+                "texture.read_clamped.heap"
+            }
+            TextureStrategy::Read(r) if r.image.heap() => "texture.read.heap",
+            TextureStrategy::Read(r) if r.checked() => "texture.read_clamped",
+            TextureStrategy::Read(_) => "texture.read",
+            TextureStrategy::Write(w) if w.image.heap() && w.guard => "texture.write_guarded.heap",
+            TextureStrategy::Write(w) if w.image.heap() => "texture.write.heap",
+            TextureStrategy::Write(w) if w.guard => "texture.write_guarded",
+            TextureStrategy::Write(_) => "texture.write",
+            TextureStrategy::Atomic(a) => return Cow::Owned(a.name()),
+            TextureStrategy::Query(q) if q.image.heap() && q.level.is_some() => {
+                "texture.query_level.heap"
+            }
+            TextureStrategy::Query(q) if q.image.heap() => "texture.query.heap",
+            TextureStrategy::Query(q) if q.level.is_some() => "texture.query_level",
+            TextureStrategy::Query(_) => "texture.query",
+            TextureStrategy::Fence => "texture.fence",
+            TextureStrategy::IsNull { .. } => "texture.is_null",
+            TextureStrategy::HeapIsNull { .. } => "texture.is_null.heap",
+            TextureStrategy::Sampling(s) => s.name(),
+            TextureStrategy::NullHandle => "texture.null_handle",
+            TextureStrategy::Switch(s) => return s.name(),
+            TextureStrategy::ImageblockSlice(s) if s.guard => "texture.imageblock_slice_guarded",
+            TextureStrategy::ImageblockSlice(_) => "texture.imageblock_slice",
+            TextureStrategy::ExtendedSample(e) => e.name(),
+            TextureStrategy::AbsentArgument(_) => AbsentArgument::NAME,
+        })
+    }
+
+    /// The estimated words.
+    fn base_words(&self) -> u32 {
+        match self {
+            TextureStrategy::Read(r) => read_words(r),
+            // The sRGB encode is the longest conversion.
+            TextureStrategy::Write(w) => {
+                96 + if w.guard { 48 } else { 0 }
+                    + if w.image.heap() { 40 } else { 0 }
+                    + if w.extended.is_some() {
+                        crate::lower::arith::extended_range::ENCODE_WORDS
+                    } else {
+                        0
+                    }
+                    // A two-plane 3D texture's first-slice coordinate and its test.
+                    + if matches!(
+                        w.extended,
+                        Some(crate::metal::format::ExtendedRange::Planes { .. })
+                    ) {
+                        64
+                    } else {
+                        0
+                    }
+                    + emit::class_write_words(w.class)
+                    + if w.heap_alpha_red {
+                        emit::HEAP_ALPHA_IN_RED_WORDS
+                    } else {
+                        0
+                    }
+                    + w.heap_conversions.words(false)
+                    + if w.cross.is_some() { 48 } else { 0 }
+                    + w.saturate.words()
+            }
+            TextureStrategy::Atomic(a) => a.words(),
+            TextureStrategy::Query(q) => {
+                24 + if q.image.heap() { 32 } else { 0 }
+                    + if q.volume { 72 } else { 0 }
+                    + if q.level.is_some() { 24 } else { 0 }
+                    + if q.heap_raw { heap_raw::QUERY_WORDS } else { 0 }
+                    + if q.heap_cross {
+                        2 * heap_raw::QUERY_WORDS
+                    } else {
+                        0
+                    }
+            }
+            TextureStrategy::Fence => 8,
+            TextureStrategy::IsNull { .. } => 8,
+            TextureStrategy::HeapIsNull { .. } => 12,
+            TextureStrategy::Sampling(s) => s.words(),
+            TextureStrategy::NullHandle => 4,
+            TextureStrategy::Switch(s) => s.words(),
+            TextureStrategy::ImageblockSlice(s) => s.words(),
+            TextureStrategy::ExtendedSample(e) => e.words(),
+            // The zero, a constant.
+            TextureStrategy::AbsentArgument(_) => 0,
+        }
+    }
+}
+
+/// The words of an access's sparse arm: the specialized branch, the sparse access, its two
+/// extractions, `OpImageSparseTexelsResident`, the word's select, and the merge's two phis.
+pub(crate) const RESIDENCY_WORDS: u32 = 48;
+
+/// The texture family's part of the per-function plan (`select::FamilyPlans`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TexturePlan {
+    /// Every texture slot the function uses, by slot index.
+    pub slots: BTreeMap<u32, SlotPlan>,
+    /// Texture calls whose `{T, i8}` status word is observed, by how (`status::observed`):
+    /// computed on the first query while selecting.
+    pub status_read: Option<BTreeMap<InstId, StatusUse>>,
+    /// Four-lane reads whose texel's alpha is observed (`alpha::observed`): computed on the first
+    /// read the shader checks while selecting.
+    pub alpha_read: Option<BTreeSet<InstId>>,
+    /// The function's heap texture handles, grouped: computed on the first heap use while
+    /// selecting.
+    pub heap_groups: Option<HeapGroups>,
+    /// Every heap group an operation uses, by group.
+    pub heap: BTreeMap<u32, HeapPlan>,
+    /// The results of the heap reads that decode a member of a form a heap reads
+    /// (`ExtendedRange::HEAP_READ`): `false` a `float` one, `true` a `half` one. The module
+    /// defines that decode's routine for each ([`heap_raw::define`]).
+    pub heap_raw: BTreeSet<bool>,
+    /// The guard conditions of the slice writes every invocation shares (`cooperative`): each
+    /// one's branch is taken by every invocation, so its condition is emitted as `true`.
+    pub cooperative: BTreeSet<ValueId>,
+    /// The heap operations the function selects (texture and sampling): each masks its handle
+    /// where the handle-table search carries flags in it (`AccessPlan::lookup`).
+    pub heap_uses: u32,
+    /// The instructions with a strategy that the default presence specialization never runs (a
+    /// nil texture's arm), sorted (`absent_arm`), whose words the census counts under
+    /// [`ABSENT_ARM`]: computed after the body's selection.
+    pub absent_arm: Vec<ValueId>,
+}
+
+impl TexturePlan {
+    /// Some heap group is declared as a storage-image class, once [`finish`] has run: its reads,
+    /// writes, and atomics are storage-image accesses, as a storage slot's are, which the Vulkan
+    /// memory model orders only with `NonPrivateTexel` (`sync::memory_model`).
+    pub fn heap_storage_images(&self) -> bool {
+        self.heap.values().any(|h| {
+            h.decl
+                .is_some_and(|d| d.usage == crate::spirv::ir::ImageUsage::Storage)
+        })
+    }
+
+    /// Whether `image` is volatile, once [`finish`] has run: its slot's, or its heap group's
+    /// class's.
+    fn volatile(&self, image: &ImageRef) -> bool {
+        match image {
+            ImageRef::Slot(index) => self.slots.get(index).is_some_and(|s| s.volatile),
+            ImageRef::Heap { group, .. } => self.heap.get(group).is_some_and(|h| h.volatile),
+        }
+    }
+}
+
+/// Whether `plan`'s accesses of `image` carry the Vulkan memory model's volatile operand
+/// (`VolatileTexel`, or an atomic's `Volatile` semantics): a volatile image under that model, which
+/// bans the `Volatile` decoration `GLSL450` takes ([`declare`]).
+pub(crate) fn volatile_texel(plan: &Plan, image: &ImageRef) -> bool {
+    plan.families.memory_model.model == crate::lower::sync::barrier::BarrierModel::Vulkan
+        && plan.families.texture.volatile(image)
+}
+
+/// Whether `plan` decorates its volatile images `Volatile`: under `GLSL450`.
+fn volatile_decorated(plan: &Plan) -> bool {
+    plan.families.memory_model.model == crate::lower::sync::barrier::BarrierModel::Glsl450
+}
+
+/// The texture family's module-scope objects.
+#[derive(Clone, Debug, Default)]
+pub struct Declared {
+    /// The image variable and image type of each declared slot (the element type of a slot's
+    /// level views).
+    pub images: BTreeMap<u32, (GlobalId, TypeId)>,
+    /// The `ResourcePresence` specialization constant of each slot whose null-ness is observed.
+    pub presence: BTreeMap<u32, SValue>,
+    /// The `OutOfBoundsAlpha` specialization constant of each slot one of whose reads selects
+    /// Metal's out-of-bounds texel in the shader and observes its alpha: a read under
+    /// [`ReadCheck::Shader`], or a level-view read under any check.
+    pub oob_alpha: BTreeMap<u32, SValue>,
+    /// The `BorderTexels` specialization constant (a `u32`) of each slot one of whose reads
+    /// through a sampler may read the border texel.
+    pub border_texels: BTreeMap<u32, SValue>,
+    /// The set-1 heap array of each declared heap class.
+    pub heap: BTreeMap<ImageHandleClass, GlobalId>,
+    /// The `SparseTexture` specialization constant of each slot with a sparse arm or a tile-map
+    /// arm.
+    pub sparse: BTreeMap<u32, SValue>,
+    /// The tile map of each slot with a tile-map arm: a word view of its `ResourceKind::TileMap`
+    /// binding.
+    pub tile_maps: BTreeMap<u32, crate::memory::views::View>,
+    /// The `TextureSwizzle` specialization constant of each texture buffer slot whose reads
+    /// apply the bound texture buffer's swizzle, and of each storage slot of
+    /// `LoweringInputs::swizzled_storage` whose reads and writes apply the bound texture's, or
+    /// extended-range sampled slot of it whose reads, samples and gathers do.
+    pub swizzle: BTreeMap<u32, SValue>,
+    /// The module's routine decoding a heap member of a form a heap reads, for a `float` result
+    /// (`false`) and a `half` one (`true`), each where a read takes it ([`heap_raw::define`]).
+    pub heap_raw: BTreeMap<bool, FuncId>,
+    /// The tests of the `ConstantLanes` specialization constant of each slot whose accesses set
+    /// the lanes Metal reads as constants.
+    pub constant_lanes: BTreeMap<u32, LaneConstants>,
+    /// The tests of the `OffsetBaseAxes` specialization constant of each slot whose accesses
+    /// place a texel offset by Metal's rule on an axis that may repeat or mirror.
+    pub offset_base: BTreeMap<u32, OffsetBase>,
+}
+
+/// A slot's `OffsetBaseAxes` specialization as `OpSpecConstantOp` tests, fixed at pipeline
+/// creation, so an access spends only its disjunction on it: on plane axis `a`, the base-level
+/// size Metal's texel-offset rule reads, a view's parent's, is not a power of two where the bound
+/// view's base level's is, where `uneven[a]` holds (`sampler::position::offset_dropped`).
+#[derive(Clone, Copy, Debug)]
+pub struct OffsetBase {
+    pub uneven: [SValue; 3],
+}
+
+impl OffsetBase {
+    /// Axis `a`'s test, where `base` holds one ([`OffsetBase::uneven`]).
+    pub fn axis(base: Option<OffsetBase>, a: u32) -> Option<SValue> {
+        base.and_then(|b| b.uneven.get(a as usize).copied())
+    }
+}
+
+/// A slot's `ConstantLanes` specialization as `OpSpecConstantOp` tests, fixed at pipeline creation,
+/// so an access spends only its selections on it: lane `l` is a constant where `constant[l]` holds,
+/// and that constant is 1 rather than 0 where `one[l]` does.
+#[derive(Clone, Copy, Debug)]
+pub struct LaneConstants {
+    pub constant: [SValue; 4],
+    pub one: [SValue; 4],
+}
+
+/// Slot `slot`'s `ConstantLanes` specialization and its tests: bit `l` of the word, and bit `4 + l`
+/// (`metal::sampler::CONSTANT_ONES`), each as a `bool` fixed at pipeline creation.
+fn lane_constants(mb: &mut ModuleBuilder, slot: SlotRef) -> BResult<LaneConstants> {
+    use crate::spirv::ir::SpecOp;
+    let u32_ = mb.ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let bool_ = mb.ty(SType::Bool)?;
+    let word = mb.spec(
+        crate::pipeline::sym::SpecKey::ConstantLanes(slot),
+        u32_,
+        ConstBits(0),
+    )?;
+    let k = |mb: &mut ModuleBuilder, v: u32| {
+        mb.constant(crate::spirv::ir::Constant::Scalar {
+            ty: u32_,
+            bits: ConstBits(u64::from(v)),
+        })
+    };
+    let (zero, one) = (k(mb, 0)?, k(mb, 1)?);
+    let bit = |mb: &mut ModuleBuilder, at: u32| -> BResult<SValue> {
+        let shift = k(mb, at)?;
+        let shifted = mb.spec_op(SpecOp::ShiftRightLogical, u32_, &[word, shift])?;
+        let masked = mb.spec_op(SpecOp::BitwiseAnd, u32_, &[shifted, one])?;
+        let set = mb.spec_op(SpecOp::ULessThan, bool_, &[zero, masked])?;
+        mb.const_value(set)
+    };
+    let never = mb.const_value(zero)?;
+    let mut lanes = LaneConstants {
+        constant: [never; 4],
+        one: [never; 4],
+    };
+    let ones = crate::metal::sampler::CONSTANT_ONES;
+    for (lane, (constant, one)) in (0u32..).zip(lanes.constant.iter_mut().zip(&mut lanes.one)) {
+        *constant = bit(mb, lane)?;
+        *one = bit(mb, ones + lane)?;
+    }
+    Ok(lanes)
+}
+
+/// Slot `slot`'s `OffsetBaseAxes` specialization and its tests: bit `a` of the word, each as a
+/// `bool` fixed at pipeline creation ([`OffsetBase`]).
+fn offset_base(mb: &mut ModuleBuilder, slot: SlotRef) -> BResult<OffsetBase> {
+    use crate::spirv::ir::SpecOp;
+    let u32_ = mb.ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let bool_ = mb.ty(SType::Bool)?;
+    let word = mb.spec(
+        crate::pipeline::sym::SpecKey::OffsetBaseAxes(slot),
+        u32_,
+        ConstBits(0),
+    )?;
+    let k = |mb: &mut ModuleBuilder, v: u32| {
+        mb.constant(crate::spirv::ir::Constant::Scalar {
+            ty: u32_,
+            bits: ConstBits(u64::from(v)),
+        })
+    };
+    let (zero, one) = (k(mb, 0)?, k(mb, 1)?);
+    let mut bit = |a: u32| -> BResult<SValue> {
+        let shift = k(mb, a)?;
+        let shifted = mb.spec_op(SpecOp::ShiftRightLogical, u32_, &[word, shift])?;
+        let masked = mb.spec_op(SpecOp::BitwiseAnd, u32_, &[shifted, one])?;
+        let set = mb.spec_op(SpecOp::ULessThan, bool_, &[zero, masked])?;
+        mb.const_value(set)
+    };
+    Ok(OffsetBase {
+        uneven: [bit(0)?, bit(1)?, bit(2)?],
+    })
+}
+
+/// Declare the image variables and presence constants of the plan's texture slots.
+pub fn declare(
+    mb: &mut ModuleBuilder,
+    plan: &Plan,
+    _modes: &mut Vec<ExecMode>,
+) -> BResult<Declared> {
+    let mut d = Declared::default();
+    // Under the identity domains a slot's texture is an element of its class's set-1 array
+    // (`slot::identity_class`), declared once per class, and the slot has no constant: its
+    // presence and its format's missing alpha are its resource ID's (`emit::identity_id`).
+    if plan.families.access.identity {
+        let mut decorated = std::collections::BTreeSet::new();
+        for (index, s) in &plan.families.texture.slots {
+            let Some(decl) = &s.decl else { continue };
+            let Some(class) = slot::identity_class(decl) else {
+                continue;
+            };
+            let g = match d.heap.get(&class) {
+                Some(g) => *g,
+                None => {
+                    let g = heap_array(mb, plan.stage, class, *decl)?;
+                    d.heap.insert(class, g);
+                    g
+                }
+            };
+            if s.volatile && volatile_decorated(plan) && decorated.insert(g) {
+                mb.volatile(g)?;
+            }
+            d.images.insert(*index, (g, decl.declare(mb)?));
+        }
+        // And each sampled slot's class (`sampler::IdentitySampling`), which no read declares.
+        for i in plan.families.sampler.identity.values() {
+            if let std::collections::btree_map::Entry::Vacant(e) = d.heap.entry(i.class) {
+                e.insert(heap_array(mb, plan.stage, i.class, i.image)?);
+            }
+        }
+        // And each class a fetched color attachment is read through (`fragment::color`'s
+        // `PushField::FetchedColor`).
+        for &class in plan.families.fragment.texture_fetches.values() {
+            if let std::collections::btree_map::Entry::Vacant(e) = d.heap.entry(class) {
+                let decl = crate::lower::fragment::texture_decl(class);
+                e.insert(heap_array(mb, plan.stage, class, decl)?);
+            }
+        }
+    }
+    let slots = (plan.families.texture.slots.iter()).filter(|_| !plan.families.access.identity);
+    for (index, s) in slots {
+        if let Some(decl) = &s.decl {
+            let image = decl.declare(mb)?;
+            // A slot's level views are one descriptor array of single-level views, and a texture
+            // buffer's parts one of texel buffers.
+            let ty = match decl.level_views.or(decl.parts.map(|p| p.count)) {
+                Some(n) => {
+                    let u32_ = mb.ty(SType::Int {
+                        width: 32,
+                        signed: false,
+                    })?;
+                    let len = mb.constant(crate::spirv::ir::Constant::Scalar {
+                        ty: u32_,
+                        bits: ConstBits(u64::from(n)),
+                    })?;
+                    mb.ty(SType::Array {
+                        elem: image,
+                        len,
+                        stride: None,
+                    })?
+                }
+                None => image,
+            };
+            let symbol = crate::pipeline::sym::ResourceSlot::metal(s.slot);
+            let g = mb.resource(symbol, crate::spirv::ir::StorageClass::UniformConstant, ty)?;
+            if s.volatile && volatile_decorated(plan) {
+                mb.volatile(g)?;
+            }
+            d.images.insert(*index, (g, image));
+        }
+        if s.presence {
+            let b = mb.ty(SType::Bool)?;
+            let c = mb.spec(
+                crate::pipeline::sym::SpecKey::Presence(s.slot),
+                b,
+                ConstBits(1),
+            )?;
+            d.presence.insert(*index, mb.const_value(c)?);
+        }
+        if s.oob_alpha {
+            let b = mb.ty(SType::Bool)?;
+            let c = mb.spec(
+                crate::pipeline::sym::SpecKey::OutOfBoundsAlpha(s.slot),
+                b,
+                ConstBits(0),
+            )?;
+            d.oob_alpha.insert(*index, mb.const_value(c)?);
+        }
+        if s.border_texels {
+            let u = mb.ty(SType::Int {
+                width: 32,
+                signed: false,
+            })?;
+            let c = mb.spec(
+                crate::pipeline::sym::SpecKey::BorderTexels(s.slot),
+                u,
+                ConstBits(u64::from(crate::metal::sampler::NEUTRAL_BORDER_TEXELS)),
+            )?;
+            d.border_texels.insert(*index, mb.const_value(c)?);
+        }
+        if s.sparse_arm || s.tile_map || s.sparse_writes {
+            let b = mb.ty(SType::Bool)?;
+            let c = mb.spec(
+                crate::pipeline::sym::SpecKey::SparseTexture(s.slot),
+                b,
+                ConstBits(0),
+            )?;
+            d.sparse.insert(*index, mb.const_value(c)?);
+        }
+        if s.tile_map {
+            let sym = crate::pipeline::sym::ResourceSlot {
+                stage: s.slot.stage,
+                kind: crate::pipeline::sym::ResourceKind::TileMap,
+                index: s.slot.index,
+            };
+            let view = crate::memory::views::declare_at(mb, sym)?;
+            d.tile_maps.insert(*index, view);
+        }
+        if s.swizzle {
+            let u32_ = mb.ty(SType::Int {
+                width: 32,
+                signed: false,
+            })?;
+            let c = mb.spec(
+                crate::pipeline::sym::SpecKey::TextureSwizzle(s.slot),
+                u32_,
+                ConstBits(u64::from(
+                    crate::metal::TextureSwizzleChannels::DEFAULT_WORD,
+                )),
+            )?;
+            d.swizzle.insert(*index, mb.const_value(c)?);
+        }
+        if s.constant_lanes {
+            let lanes = lane_constants(mb, s.slot)?;
+            d.constant_lanes.insert(*index, lanes);
+        }
+        if s.offset_base {
+            let base = offset_base(mb, s.slot)?;
+            d.offset_base.insert(*index, base);
+        }
+    }
+    for h in plan.families.texture.heap.values() {
+        let (Some(class), Some(decl)) = (h.class, h.decl) else {
+            continue;
+        };
+        if d.heap.contains_key(&class) {
+            continue;
+        }
+        let g = heap_array(mb, plan.stage, class, decl)?;
+        if h.volatile && volatile_decorated(plan) {
+            mb.volatile(g)?;
+        }
+        d.heap.insert(class, g);
+    }
+    // The unsigned integer classes the reads of raw heap members fetch them from, each declared
+    // once, and the routines decoding them.
+    for (class, decl) in plan.families.texture.heap.values().filter_map(|h| h.raw) {
+        if d.heap.contains_key(&class) {
+            continue;
+        }
+        let g = heap_array(mb, plan.stage, class, decl)?;
+        d.heap.insert(class, g);
+    }
+    // The classes of other numeric types the reads and queries of a member of another class
+    // read it through, each declared once.
+    for (class, decl) in plan
+        .families
+        .texture
+        .heap
+        .values()
+        .flat_map(|h| h.cross.values().copied())
+    {
+        if d.heap.contains_key(&class) {
+            continue;
+        }
+        let g = heap_array(mb, plan.stage, class, decl)?;
+        d.heap.insert(class, g);
+    }
+    for &half in &plan.families.texture.heap_raw {
+        d.heap_raw.insert(half, heap_raw::define(mb, half)?);
+    }
+    Ok(d)
+}
+
+/// The set-1 runtime array of heap class `class`, of `decl`'s image type, for stage `stage`.
+fn heap_array(
+    mb: &mut ModuleBuilder,
+    stage: crate::pipeline::sym::Stage,
+    class: ImageHandleClass,
+    decl: ImageDecl,
+) -> BResult<GlobalId> {
+    let ty = decl.declare(mb)?;
+    let array = mb.ty(SType::RuntimeArray {
+        elem: ty,
+        stride: None,
+    })?;
+    mb.resource(
+        crate::pipeline::sym::ResourceSlot {
+            stage,
+            kind: crate::pipeline::sym::ResourceKind::Heap(
+                crate::pipeline::sym::HandleClass::Image(class),
+            ),
+            index: 0,
+        },
+        crate::spirv::ir::StorageClass::UniformConstant,
+        array,
+    )
+}
+
+/// Plan a used texture parameter: a static handle, or an array of `N` handles in slots
+/// `n .. n + N`. Its uses declare each slot's shape.
+pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
+    let ParamRole::Texture(t) = &b.role else {
+        return Err(refuse());
+    };
+    let (AbiInt::Const(first), AbiInt::Const(count)) = (t.location.index, t.location.count) else {
+        return Err(refuse());
+    };
+    for k in 0..count {
+        let index = first.checked_add(k).ok_or_else(refuse)?;
+        let slot = SlotRef {
+            stage: cx.stage,
+            class: SlotClass::Texture,
+            index,
+        };
+        cx.families
+            .texture
+            .slots
+            .entry(index)
+            .or_insert_with(|| SlotPlan::new(slot, t.access));
+    }
+    Ok(())
+}
+
+/// The value of a texture parameter: its handle index, or offset 0 into a handle array
+/// (`memory::handles`). Texture operations name slots; this value feeds only handle selects, phis,
+/// and array element loads.
+pub fn param_value(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    b: &ParamBinding,
+) -> BResult<SValue> {
+    let v = match crate::memory::handles::binding_slots(b) {
+        Some((_, first, 1))
+            if crate::memory::provenance::handle_array_of(cx.entry, b).is_none() =>
+        {
+            Candidate::Texture(first).handle()
+        }
+        Some(_) => 0,
+        None => return Err(cx.fail(format!("parameter {} is no texture slot", b.param))),
+    };
+    let c = fb.u32_const(v)?;
+    fb.module().const_value(c)
+}
+
+/// How the `{T, i8}` status word of texture call `at` is observed ([`status::observed`]); `None`
+/// where it is not.
+fn status_use(cx: &mut SelectCx<'_>, at: InstId) -> Option<StatusUse> {
+    if cx.families.texture.status_read.is_none() {
+        let observed = status::observed(cx, cx.body);
+        cx.families.texture.status_read = Some(observed);
+    }
+    cx.families
+        .texture
+        .status_read
+        .as_ref()
+        .and_then(|s| s.get(&at).copied())
+}
+
+/// Whether the function observes the `{T, i8}` status word of texture call `at` at all.
+pub(crate) fn status_observed(cx: &mut SelectCx<'_>, at: InstId) -> bool {
+    status_use(cx, at).is_some()
+}
+
+/// Whether texture call `at` on `image` takes a residency form: the function observes bit 0 of its
+/// status word alone, on a slot. A read's and a fetch's residency and value are exact on both arms,
+/// as are a nearest sample's and a gather's of Metal's footprint; a filtered sample's, and an
+/// access's outside the footprint, records `PrecisionNote::SparseResidency` where it is not
+/// (`lower::sampler`). A heap element's residency takes none: its word is 0, Metal's for a texture
+/// that is not sparse, and the stage states `RuntimeFact::HeapResidency`, by which the binder
+/// refuses a sparse texture its handle tables reach (under the identity domains the consumer
+/// refuses every sparse texture). A word with another bit observed is refused.
+pub(crate) fn residency(cx: &mut SelectCx<'_>, at: InstId, image: ImageRef) -> Result<bool, Error> {
+    match status_use(cx, at) {
+        None => Ok(false),
+        Some(StatusUse::Residency) if image.heap() => {
+            if tabled(cx, image) {
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::HeapResidency { stage: cx.stage });
+            }
+            Ok(false)
+        }
+        Some(StatusUse::Residency) => {
+            mark(cx, image, |u| u.residency = true);
+            Ok(true)
+        }
+        Some(StatusUse::Other) => Err(refuse()),
+    }
+}
+
+/// Record that a `half` read, sample or gather of `image`, of shape `shape`, hands back the
+/// device's decode of a NaN texel: `PrecisionNote::DeviceNanEncoding`. Of a color texture slot,
+/// only where the class of the format bound there may hold a NaN (none of `TexelFormat::NAN_FREE`'s
+/// families): a test of `SpecKey::BoundTexelFormat`, which the runtime reads from the bound texture
+/// and no pipeline's key carries. A normalized, sRGB or extended-range texel decodes to no NaN, so
+/// the device's encoding of one cannot show. Of a heap's element
+/// or a depth texture, wherever it reads.
+pub(crate) fn half_texel_nans(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    m: &mut Meter,
+) -> Result<(), Error> {
+    match image {
+        ImageRef::Slot(index) if !shape.depth => {
+            use crate::metal::texel_format::TexelFormat;
+            let when = vec![[NoteTest::equal(
+                NoteOn::Bound(index),
+                TexelFormat::NAN_FREE,
+                0,
+            )]
+            .into()];
+            cx.note_when(PrecisionNote::DeviceNanEncoding, when, m)
+        }
+        _ => {
+            cx.precision.insert(PrecisionNote::DeviceNanEncoding);
+            Ok(())
+        }
+    }
+}
+
+/// Record what a read, gather, or sample of `image`, of shape `shape`, with a `float` result that
+/// may read one texel (`one`) answers: the device's conversion of the texel's codes,
+/// `PrecisionNote::DeviceTexelConversion`; of a heap's texture buffer, which no class reaches, a
+/// half-float texel's NaN the device's decode, `PrecisionNote::DeviceNanEncoding`.
+pub(crate) fn float_texel_notes(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    one: bool,
+) {
+    if !one {
+        return;
+    }
+    let note = match image.heap() && shape.dim == ImageDim::Buffer {
+        true => PrecisionNote::DeviceNanEncoding,
+        false => PrecisionNote::DeviceTexelConversion,
+    };
+    cx.precision.insert(note);
+}
+
+/// The address-mode map constexpr sampler `words` samples texture slot `index` under: the map
+/// of the texture the slot's variant binds there (`LoweringInputs::address_maps`), `None` for
+/// the identity. The slot records `RuntimeFact::ConstexprSampled` with the sampler's modes,
+/// which puts it in the variant where the binder binds a texture whose map changes one of them.
+/// Under the identity domains no binder picks a variant: `None`, with no fact, so the sampler
+/// samples with its own modes.
+pub(crate) fn constexpr_address_map(
+    cx: &mut SelectCx<'_>,
+    index: u32,
+    words: [u64; 2],
+) -> Result<Option<crate::metal::sampler::AddressModeMap>, Error> {
+    if crate::lower::access::identity(cx.profile) {
+        return Ok(None);
+    }
+    let slot = slot_of(cx, index)?.slot;
+    let modes = crate::lower::sampler::address_modes(words)
+        .ok_or_else(|| invariant("a constexpr sampler symbol with undecodable words"))?;
+    cx.facts
+        .insert(crate::pipeline::facts::RuntimeFact::ConstexprSampled { slot, modes });
+    Ok(cx.inputs.address_maps.get(&slot).copied())
+}
+
+/// A read, sample, or gather of `image` (shape `shape`) with a `half` or `float` result, which an
+/// 8-bit sRGB format bound to it would decode (`metal::texel_format`). On a sampled color texture
+/// slot (not a texture buffer, a depth texture, or a storage slot) the module records
+/// `RuntimeFact::SrgbTexture`.
+///
+/// Where the slot is one of `LoweringInputs::srgb_textures` (its variant: bound to a format the
+/// device cannot sample, held as its UNORM twin, whose view reads the codes) the access decodes
+/// what the view reads (one texel's codes, or the device's filter of them) by the MSL transfer
+/// through the device's `Pow` (`emit::srgb_texel`), returning `true` and recording
+/// `PrecisionNote::SrgbTexelDecode`.
+///
+/// Elsewhere the access reads the device's own decode through the slot's view, an sRGB format's
+/// sRGB view: the module records `PrecisionNote::SrgbTexelDecode` where the bound format's class
+/// is an sRGB one (`BicubicTexels::SRGB`, a test of the bound format that the runtime announces at
+/// a draw or dispatch binding such a texture), and outright for a heap element, whose format is
+/// never known.
+pub(crate) fn srgb_texels(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    m: &mut Meter,
+) -> Result<bool, Error> {
+    if shape.dim == ImageDim::Buffer || shape.depth {
+        return Ok(false);
+    }
+    // Under the identity domains a slot's format is never known, as a heap element's is not.
+    let index = match image {
+        ImageRef::Slot(index) if !crate::lower::access::identity(cx.profile) => index,
+        ImageRef::Slot(index) if slot_of(cx, index)?.storage() => return Ok(false),
+        _ => {
+            device_decode(cx, None, m)?;
+            return Ok(false);
+        }
+    };
+    let s = slot_of(cx, index)?;
+    if s.storage() {
+        return Ok(false);
+    }
+    let slot = s.slot;
+    cx.facts
+        .insert(crate::pipeline::facts::RuntimeFact::SrgbTexture { slot });
+    if !cx.inputs.srgb_textures.contains(&slot) {
+        device_decode(cx, Some(index), m)?;
+        return Ok(false);
+    }
+    cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+    Ok(true)
+}
+
+/// An access that reads the device's decode of a texture that may be bound in an 8-bit sRGB
+/// format ([`srgb_texels`]): `PrecisionNote::SrgbTexelDecode` where texture slot `index` is bound
+/// in such a format, or outright for a heap element (`None`).
+fn device_decode(cx: &mut SelectCx<'_>, index: Option<u32>, m: &mut Meter) -> Result<(), Error> {
+    use crate::metal::bicubic::BicubicTexels as B;
+    match index {
+        Some(index) => {
+            let srgb = NoteTest::equal(NoteOn::Bound(index), B::SRGB, B::SRGB);
+            cx.note_when(PrecisionNote::SrgbTexelDecode, vec![[srgb].into()], m)?;
+        }
+        None => {
+            cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+        }
+    }
+    Ok(())
+}
+
+/// The value id of an operand (constants included: emission materializes them).
+fn id(cx: &SelectCx<'_>, v: Value) -> Result<ValueId, Error> {
+    cx.values
+        .id(v)
+        .ok_or_else(|| cx.invariant("a texture operand out of the value range"))
+}
+
+/// `v` as an integer constant, if it is one.
+fn const_int(cx: &SelectCx<'_>, v: Value) -> Option<u64> {
+    let Value::Const(c) = v else { return None };
+    match &cx.entry.module.consts().get(c)?.value {
+        Const::Int(u) => Some(*u),
+        Const::Null => Some(0),
+        _ => None,
+    }
+}
+
+/// Whether `v` is the zero constant (scalar or vector).
+fn is_zero(cx: &SelectCx<'_>, v: Value) -> bool {
+    let Value::Const(c) = v else { return false };
+    match cx.entry.module.consts().get(c).map(|k| &k.value) {
+        Some(Const::Null) | Some(Const::Int(0)) => true,
+        Some(Const::Aggregate(parts)) => parts.iter().all(|p| {
+            cx.entry
+                .module
+                .consts()
+                .get(*p)
+                .is_some_and(|k| matches!(k.value, Const::Null | Const::Int(0)))
+        }),
+        _ => false,
+    }
+}
+
+/// The texel conversion of texel element `elem` with sign `sign`, and its numeric class.
+pub(crate) fn texel_conv(elem: Elem, sign: Option<Sign>) -> Result<(TexelConv, TexelClass), Error> {
+    Ok(match (elem, sign) {
+        (Elem::F32, None) => (TexelConv::F32, TexelClass::Float),
+        (Elem::F16, None) => (TexelConv::F16, TexelClass::Float),
+        (Elem::I32, Some(Sign::Signed)) => (TexelConv::I32, TexelClass::Sint),
+        (Elem::I32, Some(Sign::Unsigned)) => (TexelConv::I32, TexelClass::Uint),
+        (Elem::I16, Some(Sign::Signed)) => (TexelConv::I16 { signed: true }, TexelClass::Sint),
+        (Elem::I16, Some(Sign::Unsigned)) => (TexelConv::I16 { signed: false }, TexelClass::Uint),
+        _ => return Err(refuse()),
+    })
+}
+
+/// [`texel_conv`] of a read, write, or atomic on profile `p`, which also takes Metal's `ulong`
+/// texel (no sampling takes it), held as `p` holds 64-bit integers.
+fn image_texel_conv(
+    elem: Elem,
+    sign: Option<Sign>,
+    p: &crate::device::profile::DeviceProfile,
+) -> Result<(TexelConv, TexelClass), Error> {
+    if (elem, sign) == (Elem::I64, Some(Sign::Unsigned)) {
+        let wide = crate::lower::arith::legal::holds_wide(p);
+        return Ok((TexelConv::U64Words { wide }, TexelClass::Uint64));
+    }
+    texel_conv(elem, sign)
+}
+
+/// The number of plane coordinates of `dim` for reads and writes (a cube addresses a face by
+/// `(x, y)` and a face index).
+fn plane_lanes(dim: ImageDim) -> u8 {
+    match dim {
+        ImageDim::D1 | ImageDim::Buffer => 1,
+        ImageDim::D2 | ImageDim::Cube => 2,
+        ImageDim::D3 => 3,
+    }
+}
+
+/// The operands of a texture call, by role.
+struct Operands<'a> {
+    layout: Layout<TexRole>,
+    args: &'a [Value],
+}
+
+impl Operands<'_> {
+    fn get(&self, role: TexRole) -> Option<Value> {
+        let i = self.layout.index(role)?;
+        self.args.get(i).copied()
+    }
+}
+
+/// Select the strategy of texture instruction `inst`.
+pub fn select(
+    cx: &mut SelectCx<'_>,
+    at: InstId,
+    inst: &Inst,
+    m: &mut Meter,
+) -> Result<TextureStrategy, Error> {
+    let InstKind::Call(call) = &inst.kind else {
+        return Err(cx.invariant("a texture instruction that is no call"));
+    };
+    let Callee::Air {
+        op: AirIntrinsic::Texture(t),
+        ..
+    } = &call.callee
+    else {
+        return Err(cx.invariant("a texture call without a texture intrinsic"));
+    };
+    let ops = Operands {
+        layout: t.layout(),
+        args: &call.args,
+    };
+    let sampling = matches!(
+        t.op,
+        TexOp::Sample { .. }
+            | TexOp::SampleGrad { .. }
+            | TexOp::Gather { .. }
+            | TexOp::CalculateLod { .. }
+    );
+    match t.op {
+        // Sampling, gathers, and LOD queries take a sampler: the sampler family's, below.
+        TexOp::Sample { .. }
+        | TexOp::SampleGrad { .. }
+        | TexOp::Gather { .. }
+        | TexOp::CalculateLod { .. } => {}
+        // The null handle (`memory::handles`).
+        TexOp::GetNull => return Ok(TextureStrategy::NullHandle),
+        // An image memory barrier: it names no image.
+        TexOp::Fence => return Ok(TextureStrategy::Fence),
+        // A block read canonicalization did not make reads (`canon::block_read`): its size is
+        // not a literal one Metal takes.
+        TexOp::BlockRead => return Err(refuse()),
+        TexOp::WriteImageblockSlice
+        | TexOp::Read
+        | TexOp::Write
+        | TexOp::Atomic(_)
+        | TexOp::Query(_)
+        | TexOp::IsNull => {}
+    }
+    let tex = ops
+        .get(TexRole::Texture)
+        .ok_or_else(|| cx.invariant("a texture operation without a texture"))?;
+    // A status word with a bit other than residency observed, or a whole `{T, i8}` value
+    // exposed, is not established, whatever the texture. The null texture's word is 0, as its texel
+    // is (the null arm, Q7).
+    if status_use(cx, at) == Some(StatusUse::Other) {
+        return Err(refuse());
+    }
+    let slice = t.op == TexOp::WriteImageblockSlice;
+    if let Some(handle) = crate::lower::access::handle::heap_target(cx, tex)? {
+        let group = heap_group(cx, tex, m)?;
+        if slice {
+            // A slice write to a heap element writes it as a heap write does.
+            return slice::select(cx, (at, t), &ops, ImageRef::Heap { group, handle }, m);
+        }
+        if sampling {
+            // The heap element through a separate heap sampler; its residency is the stage's
+            // `HeapResidency` (an LOD query returns a plain float).
+            if !matches!(t.op, TexOp::CalculateLod { .. }) {
+                residency(cx, at, ImageRef::Heap { group, handle })?;
+            }
+            return crate::lower::sampler::select_heap_sampling(
+                cx, at, inst, t, &call.args, group, handle, m,
+            );
+        }
+        return select_image(cx, (at, inst), t, &ops, ImageRef::Heap { group, handle }, m);
+    }
+    let target = crate::lower::access::handle::texture_target(cx, tex, m)?;
+    // A slot bound in an extended-range format is read, written, and sampled (the sampler
+    // family's selection); its imageblock slices are not built yet.
+    if slice {
+        let slots: Vec<u32> = match &target {
+            HandleTarget::One(Candidate::Texture(index)) => vec![*index],
+            HandleTarget::Switch { cands, .. } => cands
+                .iter()
+                .filter_map(|c| match c {
+                    Candidate::Texture(index) => Some(*index),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        for index in slots {
+            if extended_range(cx, ImageRef::Slot(index))?.is_some() {
+                return Err(Unsupported::not_implemented(Feature::Format).into());
+            }
+        }
+    }
+    if slice {
+        return match target {
+            HandleTarget::One(Candidate::Texture(index)) => {
+                slice::select(cx, (at, t), &ops, ImageRef::Slot(index), m)
+            }
+            // A slice write to a switched or null texture is not modelled yet.
+            _ => Err(Unsupported::not_implemented(Feature::Imageblocks).into()),
+        };
+    }
+    if sampling {
+        return crate::lower::sampler::select_sampling(cx, at, inst, t, &call.args, target, m);
+    }
+    let null = |cx: &SelectCx<'_>| -> Result<NullArm, Error> {
+        Ok(match t.op {
+            TexOp::IsNull => NullArm::True,
+            TexOp::Write | TexOp::Atomic(AtomicOp::Store) => NullArm::Nothing,
+            _ => NullArm::Zero(cx.lowered_repr(Value::Inst(at), inst.ty)?),
+        })
+    };
+    match target {
+        HandleTarget::One(Candidate::Texture(index)) => {
+            select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)
+        }
+        HandleTarget::One(Candidate::Absent) => AbsentArgument::select(cx, at, inst),
+        HandleTarget::One(_) => Err(cx.invariant("a texture operand with a sampler candidate")),
+        // The constant null handle: the null arm alone, with nothing to dispatch on.
+        HandleTarget::Null => Ok(TextureStrategy::Switch(Box::new(Switch {
+            handles: Vec::new(),
+            arms: Vec::new(),
+            null: null(cx)?,
+            prelude: Prelude::Nothing,
+        }))),
+        HandleTarget::Switch { handle, cands } => {
+            let mut arms = Vec::with_capacity(cands.len());
+            for c in cands {
+                let arm = match c {
+                    // A switch-at-use's arm reads its slot's image.
+                    Candidate::Texture(index) => {
+                        select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)?
+                    }
+                    Candidate::Absent => AbsentArgument::select(cx, at, inst)?,
+                    _ => return Err(cx.invariant("a texture operand with a sampler candidate")),
+                };
+                arms.push((vec![c.handle()], arm));
+            }
+            Ok(TextureStrategy::Switch(Box::new(Switch {
+                handles: vec![handle],
+                arms,
+                null: null(cx)?,
+                prelude: Prelude::Nothing,
+            })))
+        }
+    }
+}
+
+/// The heap group of heap texture handle `tex`, planned for its first use: the function's heap
+/// handles are grouped once (`memory::handles::HeapGroups`), metered by `m`.
+fn heap_group(cx: &mut SelectCx<'_>, tex: Value, m: &mut Meter) -> Result<u32, Error> {
+    if cx.families.texture.heap_groups.is_none() {
+        cx.families.texture.heap_groups =
+            Some(HeapGroups::analyze(cx.entry, cx.body, cx.memory, m)?);
+    }
+    let groups = cx
+        .families
+        .texture
+        .heap_groups
+        .as_ref()
+        .ok_or_else(|| cx.invariant("heap handle groups"))?;
+    let Value::Inst(i) = tex else {
+        return Err(cx.invariant("a heap handle that is no instruction"));
+    };
+    let group = groups
+        .group(i)
+        .ok_or_else(|| cx.invariant("a heap handle outside every group"))?;
+    let access = groups
+        .access(group)
+        .ok_or_else(|| cx.invariant("a heap group without an access"))?;
+    cx.families
+        .texture
+        .heap
+        .entry(group)
+        .or_insert_with(|| HeapPlan::new(access));
+    cx.families.texture.heap_uses = cx.families.texture.heap_uses.saturating_add(1);
+    Ok(group)
+}
+
+/// The words of the flags a heap handle carries: where the handle-table search carries any, every
+/// heap operation masks its handle to its element (an `OpBitwiseAnd`), and a read that selects the
+/// out-of-bounds alpha also tests that flag (an `OpBitwiseAnd` and an `OpINotEqual`), with their
+/// constants once; the census's for the strategy that asks for them, `texture.read_clamped.heap`
+/// where the alpha is carried, else [`HEAP_CLASS_CENSUS`].
+pub fn routine_words(
+    texture: &TexturePlan,
+    access: &crate::lower::access::AccessPlan,
+) -> impl Iterator<Item = (&'static str, u64)> {
+    let flags = (access.heap_alpha || access.carries_class()).then(|| {
+        let words = 16 + 16 * u64::from(texture.heap_uses);
+        let name = match access.heap_alpha {
+            true => "texture.read_clamped.heap",
+            false => HEAP_CLASS_CENSUS,
+        };
+        (name, words)
+    });
+    // The heap's raw decode, once per result type.
+    let raw = (!texture.heap_raw.is_empty()).then(|| {
+        (
+            heap_raw::CENSUS_NAME,
+            heap_raw::ROUTINE_WORDS * texture.heap_raw.len() as u64,
+        )
+    });
+    flags.into_iter().chain(raw)
+}
+
+/// The census name of the words a heap texel class costs: where no other flag is carried, the masks
+/// of the heap handles.
+pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
+
+/// What a `float` write to texture `image` (of storage class `class`) records where it may reach a
+/// half-float image ([`may_store_half`]), which the device converts whole. Its rounding of each
+/// channel to `half` (Metal rounds toward zero, a finite value past 65504 to 65504) is the device's
+/// (`PrecisionNote::DeviceColorConversion`). A write of an integer texel into a texture of the
+/// float class (`cross`, `emit::cross_write`), which Metal stores rounded to nearest even onto a
+/// half-float or small-float channel, records the note wherever it may reach one, the device's
+/// conversion rounding as it rounds a `float` write (toward zero on every measured driver: within
+/// one unit in the last place of the channel's Metal value, a finite value past 65504 stored as
+/// 65504 where Metal's `half` is the infinity). Its NaN is the device's encoding of it, where
+/// Metal's is `0x7e00` (`PrecisionNote::DeviceNanEncoding`). A write that may reach a packed small
+/// float image ([`small_float_storage`]) stores its NaN as the device converts it too: Metal stores
+/// every NaN there as its canonical one, and RADV and NVIDIA keep another NaN's payload bits. A
+/// texel that holds no NaN (`nans` false: a constant none of whose lanes is one) records neither
+/// NaN's note. A slot declared without a format records each note under the format bound there, and
+/// a heap element under the families of the textures the stage's handles can name
+/// (`SpecKey::HeapNanFamilies`) (`m` charged for the clauses), which the runtime announces at a
+/// draw or dispatch that binds or makes resident such a texture.
+pub(super) fn half_storage_facts(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    (class, cross, nans): (StorageImageClass, bool, bool),
+    m: &mut Meter,
+) -> Result<(), Error> {
+    let half = match class {
+        StorageImageClass::Identity => may_store_half(cx, image)?,
+        _ => Vec::new(),
+    };
+    if !half.is_empty() {
+        cx.note_when(PrecisionNote::DeviceColorConversion, half.clone(), m)?;
+        if nans {
+            cx.note_when(PrecisionNote::DeviceNanEncoding, half, m)?;
+        }
+    }
+    let small = small_float_storage(cx, image)?;
+    if cross {
+        cx.note_when(PrecisionNote::DeviceColorConversion, small.clone(), m)?;
+    }
+    if small.is_empty() || !nans {
+        return Ok(());
+    }
+    cx.note_when(PrecisionNote::DeviceNanEncoding, small, m)
+}
+
+/// Where a write to texture `image` may store into a packed small float format (`RG11B10Float`;
+/// `RGB9E5Float` is written through its word alias, whose word is Metal's), as the clauses of
+/// [`stored_where`]: a heap element's where the stage's handles can name one
+/// (`bind::heap::NAN_SMALL`), a slot's whose storage choice declares one, and a slot's declared
+/// without a format where the texture bound there is of the small floats' class
+/// (`metal::texel_format::PackedTexels::SmallFloat`).
+fn small_float_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>, Error> {
+    use crate::metal::texel_format::{PackedTexels, TexelFormat};
+    let small = PackedTexels::SmallFloat.class().0;
+    stored_where(
+        cx,
+        image,
+        |f| f == crate::vk::Format::B10G11R11_UFLOAT_PACK32,
+        |index| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, small),
+        crate::bind::heap::NAN_SMALL,
+    )
+}
+
+/// Where a write to texture `image` left to the device's conversion stores into a format
+/// `declared` accepts, as clauses for [`SelectCx::note_when`]: for a heap element, whose handle
+/// may name any format, where the stage's handles can name a texture of the heap NaN family
+/// `family` (`SpecKey::HeapNanFamilies`, `bind::heap::nan_family`: the formats `declared` and
+/// `bound` accept); for a slot whose storage choice declares a format, always where `declared`
+/// accepts it, else never (no clause); and for a slot declared without a format (a formatless
+/// choice, or a variant that states no choice, which `slot::storage_format` declares formatless),
+/// where the format bound there passes `bound`'s test of its class (`NoteOn::Bound`). The runtime
+/// reads a heap's or a bound format's clause at each draw or dispatch.
+fn stored_where(
+    cx: &SelectCx<'_>,
+    image: ImageRef,
+    declared: impl Fn(crate::vk::Format) -> bool,
+    bound: impl Fn(u32) -> NoteTest,
+    family: u32,
+) -> Result<Vec<NoteClause>, Error> {
+    let ImageRef::Slot(index) = image else {
+        return Ok(vec![[NoteTest::equal(
+            NoteOn::HeapNan(cx.stage),
+            family,
+            family,
+        )]
+        .into()]);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    Ok(
+        match cx.inputs.storage_images.get(&slot).map(|c| c.vk_format) {
+            None | Some(crate::vk::Format::UNDEFINED) => vec![[bound(index)].into()],
+            Some(f) if declared(f) => vec![NoteClause::new()],
+            Some(_) => Vec::new(),
+        },
+    )
+}
+
+/// Each family a written texture may be of, by its bit of `SpecKey::HeapNanFamilies`
+/// (`bind::heap::nan_family`).
+const NAN_FAMILIES: [u32; 4] = {
+    use crate::bind::heap::{NAN_OTHER, NAN_SIXTEEN, NAN_SMALL, NAN_WIDE};
+    [NAN_SIXTEEN, NAN_WIDE, NAN_SMALL, NAN_OTHER]
+};
+
+/// What a `half` texel's write to texture `image` records of its NaN. Metal stores a written
+/// half's NaN as the half's own bits in a 16-bit float channel and as its conversion of the
+/// canonical `0x7fc00000` in any other (the M3 Max under macOS 26.7, measured by the consumer; the
+/// M4 under macOS 27.0.1: every NaN class, both signs, `write` and `read_write`, `Shared` and
+/// `Private`). The write stores the half widened, its NaN's payload in the significand's top bits,
+/// which the device converts: a 32-bit float channel's NaN is the widened `float`'s bits as
+/// written, the device's widening's, and every other float channel's (a 16-bit or packed small
+/// float one's included) is the device's conversion's.
+///
+/// The write records `PrecisionNote::DeviceNanEncoding` wherever the stored NaN is the device's:
+/// every float channel's (a format that may hold a NaN). A slot whose choice declares no format (or
+/// a variant that states none) records it under the format bound there (`m` charged for the
+/// clauses), and a heap element's under the families of the textures the stage's handles can name
+/// (`SpecKey::HeapNanFamilies`, `bind::heap::nan_family`), which the runtime announces at a draw or
+/// dispatch that binds or makes resident such a texture. A normalized or integer channel stores no
+/// NaN.
+pub(super) fn half_write_nans(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    m: &mut Meter,
+) -> Result<(), Error> {
+    use crate::vk::NumericFormat as N;
+    // Whether the stored NaN is exact (`Exact`), the device's (`Device`), or the bound format's
+    // to decide (`Bound`).
+    #[derive(PartialEq)]
+    enum Stored {
+        Exact,
+        Device,
+        Bound(u32),
+    }
+    let declared = |f: crate::vk::Format| -> Stored {
+        if f == crate::vk::Format::B10G11R11_UFLOAT_PACK32 {
+            return Stored::Device;
+        }
+        match f.block() {
+            Some(b) if !matches!(b.color, Some(N::Sfloat | N::Ufloat)) => Stored::Exact,
+            _ => Stored::Device,
+        }
+    };
+    let stored = match image {
+        // An element of any family the stage's handles can name (`SpecKey::HeapNanFamilies`).
+        ImageRef::Heap { .. } => {
+            let when: Vec<NoteClause> = NAN_FAMILIES
+                .iter()
+                .map(|&family| [NoteTest::equal(NoteOn::HeapNan(cx.stage), family, family)].into())
+                .collect();
+            return cx.note_when(PrecisionNote::DeviceNanEncoding, when, m);
+        }
+        ImageRef::Slot(index) => {
+            let slot = slot_of(cx, index)?.slot;
+            match cx.inputs.storage_images.get(&slot) {
+                Some(c) => match c.class {
+                    StorageImageClass::Identity if c.vk_format == crate::vk::Format::UNDEFINED => {
+                        Stored::Bound(index)
+                    }
+                    StorageImageClass::Identity => declared(c.vk_format),
+                    _ => Stored::Exact,
+                },
+                None => Stored::Bound(index),
+            }
+        }
+    };
+    if let Stored::Bound(index) = stored {
+        use crate::metal::bicubic::BicubicTexels as B;
+        use crate::metal::texel_format::{PackedTexels, TexelFormat};
+        let family = B::LINEAR | B::HALF | TexelFormat::NAN_FREE;
+        let packed = TexelFormat::PACKED_MASK;
+        let bound = |mask, bits| NoteTest::equal(NoteOn::Bound(index), mask, bits);
+        // Each family the bound class may name, and a class of no family, which may hold a NaN the
+        // device stores as it likes.
+        let when: Vec<NoteClause> = vec![
+            [bound(family, B::HALF), bound(packed, 0)].into(),
+            [bound(family, B::LINEAR), bound(packed, 0)].into(),
+            [bound(packed, PackedTexels::SmallFloat.class().0)].into(),
+            [bound(family, 0), bound(packed, 0)].into(),
+        ];
+        return cx.note_when(PrecisionNote::DeviceNanEncoding, when, m);
+    }
+    if stored == Stored::Device {
+        cx.precision.insert(PrecisionNote::DeviceNanEncoding);
+    }
+    Ok(())
+}
+
+/// Whether texel `value` is a constant none of whose lanes is a NaN: a `half` or `float` scalar or
+/// vector constant whose every lane's bits are not a NaN's. Its write stores no NaN, so no device's
+/// encoding of one can show. An `undef` texel, a composite, and any computed value may hold one.
+pub(crate) fn holds_no_nan(cx: &SelectCx<'_>, value: Value) -> bool {
+    use crate::lower::arith::legal::LoweredConst as C;
+    use crate::spirv::ids::ScalarTy;
+    let nan = |ty: ScalarTy, bits: u64| match ty {
+        ScalarTy::Float { bits: 16 } => bits & 0x7c00 == 0x7c00 && bits & 0x3ff != 0,
+        ScalarTy::Float { bits: 32 } => bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x7f_ffff != 0,
+        _ => true,
+    };
+    match cx.constant(value) {
+        Some(C::Scalar { ty, bits }) => !nan(ty, bits),
+        Some(C::Vector { elem, lanes }) => lanes.iter().all(|&bits| !nan(elem, bits)),
+        _ => false,
+    }
+}
+
+/// Whether a storage read or write of a `float` or `half` texel (`texel`) through heap handle
+/// `image` of shape `shape` converts an `A8Unorm` member's texels: a heap access, not to a texture
+/// buffer (no heap class holds one), on a device that holds such a texture's alpha in
+/// its `R8_UNORM` image's red (`metal::format::alpha_in_red`), which the storage array views without
+/// a component mapping (`bind::heap`'s storage elements). The handle carries its class index, and
+/// where it is `A8Unorm`'s (`metal::texel_format::heap_alpha_in_red_index`) a read is Metal's
+/// `(0, 0, 0, r)` and a write stores the alpha in red (`StorageImageClass::AlphaInRed`'s
+/// conversion), as Metal reads and writes such a member (probe `a8`'s argument buffers).
+pub(super) fn heap_alpha_in_red(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    texel: TexelConv,
+) -> bool {
+    let applies = tabled(cx, image)
+        && matches!(texel, TexelConv::F32 | TexelConv::F16)
+        && shape.dim != ImageDim::Buffer
+        && crate::metal::format::alpha_in_red(crate::metal::PixelFormat::A8Unorm, cx.profile);
+    if applies {
+        cx.families.access.heap_class_index = true;
+    }
+    applies
+}
+
+/// Whether `image` is a heap image whose members the binder holds in the handle tables' forms
+/// (their classes, raw texels and conversions): any heap image but under the identity domains,
+/// where an argument buffer's texture is the element its resource ID names, read in the class the
+/// shader declares through the plain form (`access::handle::emit_identity_handle`).
+pub(crate) fn tabled(cx: &SelectCx<'_>, image: ImageRef) -> bool {
+    image.heap() && !crate::lower::access::identity(cx.profile)
+}
+
+/// Whether a storage read of `image` reads the null element where its handle carries
+/// `memory::handles::FLAG_STORAGE_UNREADABLE` ([`Read::heap_unreadable`]): a heap image on a
+/// device that reads storage without a format by the formats' own bits alone
+/// (`DeviceProfile::storage_reads_by_format_bits`), whose storage arrays hold a member whose
+/// view's format lacks the read bit for its writes alone (`bind::heap`). The handle-table search
+/// then carries the flag.
+fn heap_unreadable(cx: &mut SelectCx<'_>, image: ImageRef) -> bool {
+    let applies = tabled(cx, image) && cx.profile.storage_reads_by_format_bits();
+    if applies {
+        cx.families.access.heap_unreadable = true;
+    }
+    applies
+}
+
+/// The conversions a storage access of a `float` or `half` texel through a heap handle makes of
+/// the members its storage array views through their storage choice's alias
+/// ([`heap_storage_conversions`]), by each member's key: its texel class index and whether its
+/// format is blue-first (`metal::format::red_blue_exchanged`), both of which its handle carries.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeapConversions {
+    /// The keys of the members whose red and blue the access exchanges (`SwizzleBgra`,
+    /// `SrgbEncodeBgra`).
+    pub swap: Vec<(u32, bool)>,
+    /// The keys of the members whose color lanes are 8-bit sRGB codes, decoded by a read and
+    /// encoded by a write through the device's transfer (`SrgbEncode`, `SrgbEncodeBgra`).
+    pub srgb: Vec<(u32, bool)>,
+}
+
+impl HeapConversions {
+    /// The estimated words of the conversions of a read (`read`) or a write: the key's field and
+    /// each key's comparison and disjunction, then for each kind its select and the exchange's
+    /// shuffle, the decode's transfer ([`SRGB_DECODE_WORDS`]) or the encode's
+    /// (`emit::SRGB_WRITE_WORDS`).
+    pub(crate) fn words(&self, read: bool) -> u32 {
+        let keys = |k: &[(u32, bool)]| match k.len() as u32 {
+            0 => 0,
+            n => 16 + 12 * n,
+        };
+        let swap = match self.swap.is_empty() {
+            true => 0,
+            false => keys(&self.swap) + 16,
+        };
+        let srgb = match (self.srgb.is_empty(), read) {
+            (true, _) => 0,
+            (false, true) => keys(&self.srgb) + SRGB_DECODE_WORDS + 8,
+            (false, false) => keys(&self.srgb) + emit::SRGB_WRITE_WORDS + 8,
+        };
+        swap + srgb
+    }
+}
+
+/// The conversions a storage read or write of a `float` or `half` texel (`texel`) through heap
+/// handle `image` of shape `shape` makes ([`HeapConversions`]): none but of a heap image that is
+/// not a texture buffer (no heap class holds one). A member the binder views through its storage
+/// choice's alias (`bind::heap::storage_conversions`, the list both take) is converted as a slot
+/// of that choice converts its texels: an 8-bit sRGB texture where the device stores no sRGB
+/// format through its UNORM alias, its codes decoded and encoded by the device's transfer
+/// (`PrecisionNote::SrgbTexelDecode` for a read, `PrecisionNote::DevicePackConversion` for a
+/// write, recorded by the caller), and a blue-first texture where the device stores only its
+/// RGBA-order twin, red and blue exchanged, which is exact. The handle carries its class and
+/// red-blue order (`memory::handles::Lookup::Flagged`).
+pub(super) fn heap_storage_conversions(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    texel: TexelConv,
+) -> HeapConversions {
+    let mut out = HeapConversions::default();
+    if !tabled(cx, image)
+        || !matches!(texel, TexelConv::F32 | TexelConv::F16)
+        || shape.dim == ImageDim::Buffer
+    {
+        return out;
+    }
+    for c in crate::bind::heap::storage_conversions(cx.profile) {
+        let key = (c.index, c.red_blue);
+        if matches!(
+            c.class,
+            StorageImageClass::SwizzleBgra | StorageImageClass::SrgbEncodeBgra
+        ) {
+            out.swap.push(key);
+        }
+        if matches!(
+            c.class,
+            StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra
+        ) {
+            out.srgb.push(key);
+        }
+    }
+    if !(out.swap.is_empty() && out.srgb.is_empty()) {
+        cx.families.access.heap_class_index = true;
+        cx.families.access.heap_red_blue = true;
+    }
+    out
+}
+
+/// What a `float` (or `half`, held widened) texel's write to texture `image` records where the
+/// texture's format may be a normalized one, whose conversion the device makes: Metal stores each
+/// channel's value clamped to its range (a NaN 0) times its maximum code exactly, rounded to
+/// nearest with a tie away from zero, a 1-bit channel 1 only above one half, and every such write
+/// records `PrecisionNote::DeviceColorConversion` (ANV and lavapipe round the `f32` product with
+/// ties to even, and RADV rounds a 1-bit channel's half up). A slot whose storage choice declares a
+/// format that is not normalized, or encodes it by its class (sRGB, a YCbCr write, the half and
+/// small floats), records nothing.
+pub(super) fn norm_storage_facts(cx: &mut SelectCx<'_>, image: ImageRef) -> Result<(), Error> {
+    use crate::vk::NumericFormat as N;
+    // Whether the write may reach a normalized format.
+    let reached = match image {
+        ImageRef::Heap { .. } => true,
+        ImageRef::Slot(index) => {
+            let slot = slot_of(cx, index)?.slot;
+            match cx.inputs.storage_images.get(&slot) {
+                None => true,
+                Some(c) => {
+                    let formatless = c.vk_format == crate::vk::Format::UNDEFINED;
+                    let normalized = formatless
+                        || c.vk_format
+                            .block()
+                            .is_some_and(|b| matches!(b.color, Some(N::Unorm | N::Snorm)));
+                    let converted = matches!(
+                        c.class,
+                        StorageImageClass::Identity
+                            | StorageImageClass::SwizzleBgra
+                            | StorageImageClass::AlphaInRed
+                            | StorageImageClass::RotateArgb
+                    );
+                    normalized && converted
+                }
+            }
+        }
+    };
+    if reached {
+        cx.precision.insert(PrecisionNote::DeviceColorConversion);
+    }
+    Ok(())
+}
+
+/// A fragment function's write of a texel of form `texel` to texture `image` (`extended`: an
+/// extended-range texture's raw texels, never such) that Apple's `textureWriteRoundingMode` 2
+/// stores otherwise than the default, under the pipeline's mode (`LoweringInputs::
+/// texture_write_rounding`; on an Apple M4 under macOS 27.0.1 and the M3 Max's
+/// package m3pkg-twr under macOS 26.7, alike): a `float` texel into a half-float texture (rounded
+/// to nearest even at mode 2) or a packed small-float one (`RG11B10Float`: rounded to nearest even,
+/// held at the largest finite value; `RGB9E5Float`: unmeasured), and a `half` texel into a packed
+/// small-float one (unmeasured). Kernel, vertex, object, mesh and tile functions write alike at
+/// every mode. The write is built under the default's rule alone, so: a write that may be such
+/// records the mode in `StageIo::texture_write_rounding`, for link to match against the pipeline's;
+/// under `NearestEven` one whose slot's storage choice declares such a format is refused
+/// `NotImplemented(PrivateRenderState(TextureWriteRounding))`, and one whose bound texture
+/// decides (a slot or texture buffer whose choice declares no format; a heap handle) states
+/// `RuntimeFact::StorageTextureWriteRounding` or `RuntimeFact::HeapWriteRounding`, which the
+/// binder refuses where such a texture is bound or reached. A write to any other texture draws
+/// as Metal's at either mode.
+fn mode_rounded_write(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    texel: TexelForm,
+    extended: bool,
+) -> Result<(), Error> {
+    use crate::metal::TextureWriteRoundingMode as Mode;
+    use crate::pipeline::facts::RuntimeFact;
+    use crate::vk::Format as F;
+    // Where the write may go: a format the slot declares, or one the bound texture decides.
+    enum Target {
+        Declared { half: bool, small: bool },
+        Slot(SlotRef),
+        Heap,
+    }
+    let halves = match texel.conv {
+        TexelConv::F32 => true,
+        TexelConv::F16 => false,
+        _ => return Ok(()),
+    };
+    if cx.stage != crate::pipeline::sym::Stage::Fragment || extended {
+        return Ok(());
+    }
+    let target = match image {
+        ImageRef::Heap { .. } => Target::Heap,
+        ImageRef::Slot(index) => {
+            let slot = slot_of(cx, index)?.slot;
+            match cx.inputs.storage_images.get(&slot) {
+                None => Target::Slot(slot),
+                Some(c) => match c.class {
+                    StorageImageClass::Identity if c.vk_format == F::UNDEFINED => {
+                        Target::Slot(slot)
+                    }
+                    StorageImageClass::Identity => Target::Declared {
+                        half: matches!(
+                            c.vk_format,
+                            F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT
+                        ),
+                        small: matches!(
+                            c.vk_format,
+                            F::B10G11R11_UFLOAT_PACK32 | F::E5B9G9R9_UFLOAT_PACK32
+                        ),
+                    },
+                    _ => Target::Declared {
+                        half: false,
+                        small: false,
+                    },
+                },
+            }
+        }
+    };
+    if let Target::Declared { half, small } = target {
+        if !(small || (half && halves)) {
+            return Ok(());
+        }
+    }
+    let mode = cx.inputs.texture_write_rounding;
+    cx.families.stage_io.interface.texture_write_rounding = Some(mode);
+    if mode == Mode::TowardZero {
+        return Ok(());
+    }
+    match target {
+        Target::Declared { .. } => {
+            return Err(Unsupported::not_implemented(Feature::PrivateRenderState(
+                crate::error::PrivateRenderField::TextureWriteRounding,
+            ))
+            .into());
+        }
+        Target::Slot(slot) => {
+            cx.facts
+                .insert(RuntimeFact::StorageTextureWriteRounding { slot, halves });
+        }
+        Target::Heap => {
+            cx.facts.insert(RuntimeFact::HeapWriteRounding {
+                stage: cx.stage,
+                halves,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Where a write to `image` left to the device's conversion may store a half-float texel, as the
+/// clauses of [`stored_where`]: a heap element's where the stage's handles can name a 16-bit float
+/// texture (`bind::heap::NAN_SIXTEEN`), a slot's whose storage choice declares a half-float format
+/// does, and a slot's declared without a format does where the texture bound there is of a
+/// half-float class (`BicubicTexels::HALF` without a packed field, which the small floats' class
+/// carries).
+fn may_store_half(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>, Error> {
+    use crate::metal::bicubic::BicubicTexels;
+    use crate::metal::texel_format::TexelFormat;
+    use crate::vk::Format as F;
+    let mask = BicubicTexels::HALF | TexelFormat::PACKED_MASK;
+    stored_where(
+        cx,
+        image,
+        |f| matches!(f, F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT),
+        |index| NoteTest::equal(NoteOn::Bound(index), mask, BicubicTexels::HALF),
+        crate::bind::heap::NAN_SIXTEEN,
+    )
+}
+
+/// The class of texture slot `image`'s storage choice, where its variant states one, else
+/// `Identity`: a write through a converting class moves or encodes the written channels
+/// (`RotateArgb`'s rotation, `SrgbEncode`'s codes). A heap element's is `Identity`.
+pub(crate) fn storage_class(
+    cx: &SelectCx<'_>,
+    image: ImageRef,
+) -> Result<StorageImageClass, Error> {
+    let ImageRef::Slot(index) = image else {
+        return Ok(StorageImageClass::Identity);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    Ok(cx
+        .inputs
+        .storage_images
+        .get(&slot)
+        .map_or(StorageImageClass::Identity, |c| c.class))
+}
+
+/// The extended-range format of texture slot `image`'s variant (`LoweringInputs::extended_range`),
+/// if it binds one: the function then reads and writes the bound texture's raw texels. A heap
+/// element is never one (the binder refuses such a member).
+pub(crate) fn extended_range(
+    cx: &SelectCx<'_>,
+    image: ImageRef,
+) -> Result<Option<crate::metal::format::ExtendedRange>, Error> {
+    let ImageRef::Slot(index) = image else {
+        return Ok(None);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    Ok(cx.inputs.extended_range.get(&slot).copied())
+}
+
+/// Mark texture slot `index` as accessed in a way a texture buffer's parts do not answer
+/// (`slot::SlotPlan::not_parts`): the slot takes no parts variant.
+pub(crate) fn not_parts(cx: &mut SelectCx<'_>, index: u32) {
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.not_parts = true;
+    }
+}
+
+/// The numeric class of the texture texture slot `image`'s variant binds where it is not the
+/// class the function declares there (`LoweringInputs::cross_class`), else `None`: the slot's
+/// image is declared of that class (`slot::image_class`), and its reads, samples and gathers take
+/// that class's own result ([`native_form`]). A heap element never has one.
+pub(crate) fn cross_class(cx: &SelectCx<'_>, image: ImageRef) -> Result<Option<TexelClass>, Error> {
+    let ImageRef::Slot(index) = image else {
+        return Ok(None);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    Ok(match cx.inputs.cross_class.get(&slot) {
+        None => None,
+        Some(SampledType::Float) => Some(TexelClass::Float),
+        Some(SampledType::Sint) => Some(TexelClass::Sint),
+        Some(SampledType::Uint) => Some(TexelClass::Uint),
+        Some(_) => return Err(Unsupported::not_implemented(Feature::Format).into()),
+    })
+}
+
+/// The form a read, sample or gather declared `declared` takes on a slot whose variant binds a
+/// texture of class `bound` ([`cross_class`]): `bound`'s own 32-bit result (`float` for a
+/// float class, a 32-bit integer for either integer class) of the same lanes, whose words plain
+/// Metal hands back as the declared result (`emit::reinterpret`; measured on Apple M3 Max and M4).
+/// A `short` or `ushort` result takes a 32-bit integer of an integer class, whose low 16 bits Metal
+/// hands back, and the `half` of the float class, whose bits it hands back (on an Apple M3 Max).
+/// `None` for a declared `ulong` result, whose answer is not measured, which the slot's compile
+/// states no `RuntimeFact::CrossClassReads` for.
+pub(crate) fn native_form(declared: TexelForm, bound: TexelClass) -> Option<TexelForm> {
+    let conv = match (declared.conv, bound) {
+        (TexelConv::F32 | TexelConv::F16 | TexelConv::I32, TexelClass::Float) => TexelConv::F32,
+        (TexelConv::I16 { .. }, TexelClass::Float) => TexelConv::F16,
+        (
+            TexelConv::F32 | TexelConv::F16 | TexelConv::I32 | TexelConv::I16 { .. },
+            TexelClass::Sint | TexelClass::Uint,
+        ) => TexelConv::I32,
+        _ => return None,
+    };
+    Some(TexelForm { conv, ..declared })
+}
+
+/// The form a write of declared texel `declared` takes on a storage slot whose variant binds a
+/// texture of class `bound` in format `format` (the slot's storage choice declares it): `bound`'s
+/// own form, into which `emit::cross_write` turns the written lanes as plain Metal stores them
+/// (on an Apple M3 Max): a 32-bit integer of an integer class, a `float` of the float class from a
+/// 32-bit integer, and from a `short` or `ushort` the `half` its bits hold, or the `float` holding
+/// it where the format's channels are small floats (which Metal rounds to nearest even there).
+/// `None` for a `ulong` texel, or an integer texel into an `RGB9E5Float` texture, whose stores are
+/// not measured.
+pub(crate) fn native_write_form(
+    declared: TexelForm,
+    bound: TexelClass,
+    format: crate::vk::Format,
+) -> Option<TexelForm> {
+    use crate::vk::Format as F;
+    let conv = match (declared.conv, bound) {
+        (TexelConv::F32 | TexelConv::F16 | TexelConv::I32, TexelClass::Sint | TexelClass::Uint)
+        | (TexelConv::I16 { .. }, TexelClass::Sint | TexelClass::Uint) => TexelConv::I32,
+        (TexelConv::I32 | TexelConv::I16 { .. }, TexelClass::Float)
+            if format == F::E5B9G9R9_UFLOAT_PACK32 =>
+        {
+            return None
+        }
+        (TexelConv::I32, TexelClass::Float) => TexelConv::F32,
+        (TexelConv::I16 { .. }, TexelClass::Float) if format == F::B10G11R11_UFLOAT_PACK32 => {
+            TexelConv::F32
+        }
+        (TexelConv::I16 { .. }, TexelClass::Float) => TexelConv::F16,
+        _ => return None,
+    };
+    Some(TexelForm { conv, ..declared })
+}
+
+/// Mark slot `image`'s use of a result `form` whose answer from a texture of another class is not
+/// measured (`slot::Uses::narrow_result`): a `ulong` one.
+pub(crate) fn mark_result(cx: &mut SelectCx<'_>, image: ImageRef, form: TexelForm) {
+    if matches!(form.conv, TexelConv::U64Words { .. }) {
+        mark(cx, image, |u| u.narrow_result = true);
+    }
+}
+
+/// Whether texture slot `image` is one of `LoweringInputs::swizzled_storage`, a storage slot
+/// bound to a swizzled texture: the function applies the swizzle to the texels it reads there
+/// and undoes it on those it writes; or an extended-range sampled slot bound to one, whose decoded
+/// texels the function's reads, samples and gathers swizzle; or a packed normalized sampled slot
+/// bound to one, whose converted texels they swizzle. A heap element never is.
+pub(crate) fn swizzled_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
+    let ImageRef::Slot(index) = image else {
+        return Ok(false);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    Ok(cx.inputs.swizzled_storage.contains(&slot))
+}
+
+/// Record that texture slot `index`'s function applies its bound texture's swizzle: the slot's
+/// `TextureSwizzle` specialization (`RuntimeFact::TextureSwizzle`).
+pub(crate) fn swizzles(cx: &mut SelectCx<'_>, index: u32) -> Result<(), Error> {
+    let slot = slot_of(cx, index)?.slot;
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.swizzle = true;
+    }
+    cx.facts
+        .insert(crate::pipeline::facts::RuntimeFact::TextureSwizzle { slot });
+    Ok(())
+}
+
+/// Record an operation of shape `shape` and texel class `texel` on `image`'s declaration.
+fn observe(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    texel: Option<TexelClass>,
+) -> Result<(), Error> {
+    let t = &mut cx.families.texture;
+    match image {
+        ImageRef::Slot(index) => match t.slots.get_mut(&index) {
+            Some(s) => s.observe(shape, texel),
+            None => Err(invariant("an unplanned texture slot")),
+        },
+        ImageRef::Heap { group, .. } => match t.heap.get_mut(&group) {
+            Some(h) => h.observe(shape, texel),
+            None => Err(invariant("an unplanned heap group")),
+        },
+    }
+}
+
+fn invariant(detail: &str) -> Error {
+    Error::Internal(crate::error::InternalError::new(
+        crate::error::InternalKind::Invariant,
+        detail,
+    ))
+}
+
+/// Whether `image` is a storage image, and whether it is write-only (a heap group's members
+/// say only sampled or storage).
+fn image_access(cx: &SelectCx<'_>, image: ImageRef) -> Result<(bool, bool), Error> {
+    match image {
+        ImageRef::Slot(index) => {
+            let s = slot_of(cx, index)?;
+            Ok((s.storage(), s.access == AbiAccess::Write))
+        }
+        ImageRef::Heap { group, .. } => match cx.families.texture.heap.get(&group) {
+            Some(h) => Ok((h.access == ImageAccess::Storage, false)),
+            None => Err(cx.invariant("an unplanned heap group")),
+        },
+    }
+}
+
+/// Mark a use of `image`.
+fn mark(cx: &mut SelectCx<'_>, image: ImageRef, f: impl FnOnce(&mut slot::Uses)) {
+    let t = &mut cx.families.texture;
+    let uses = match image {
+        ImageRef::Slot(index) => t.slots.get_mut(&index).map(|s| &mut s.uses),
+        ImageRef::Heap { group, .. } => t.heap.get_mut(&group).map(|h| &mut h.uses),
+    };
+    if let Some(u) = uses {
+        f(u);
+    }
+}
+
+/// Select texture operation `inst` (not a sampling one) on `image`: a static texture slot, or a
+/// heap element.
+fn select_image(
+    cx: &mut SelectCx<'_>,
+    (at, inst): (InstId, &Inst),
+    t: &crate::air::intrinsics::Texture,
+    ops: &Operands<'_>,
+    image: ImageRef,
+    m: &mut Meter,
+) -> Result<TextureStrategy, Error> {
+    let shape = t.image;
+    if let ImageRef::Slot(index) = image {
+        // A texture buffer's parts read, write and update a texel by its index, and answer the
+        // width, the presence and a fence; nothing else.
+        if !matches!(
+            t.op,
+            TexOp::Read
+                | TexOp::Write
+                | TexOp::Atomic(_)
+                | TexOp::Fence
+                | TexOp::IsNull
+                | TexOp::Query(Query::Width)
+        ) {
+            not_parts(cx, index);
+        }
+    }
+    let texel = match t.texel {
+        Some(x) if matches!(t.op, TexOp::Read | TexOp::Write | TexOp::Atomic(_)) => Some(
+            image_texel_conv(x.ty.elem, x.sign, cx.profile).map(|(c, class)| {
+                let lanes = u8::try_from(x.ty.lanes).unwrap_or(0);
+                (TexelForm { conv: c, lanes }, class)
+            })?,
+        ),
+        _ => None,
+    };
+    observe(cx, image, shape, texel.map(|(_, c)| c))?;
+    if let Some(form) = extended_range(cx, image)? {
+        // Metal binds an extended-range texture only to a `float` or `half` parameter; a read or
+        // write of a whole texel of a texture (not a texel buffer) is built.
+        let whole = texel
+            .is_none_or(|(f, _)| matches!(f.conv, TexelConv::F32 | TexelConv::F16) && f.lanes == 4);
+        if !whole || shape.dim == ImageDim::Buffer || matches!(t.op, TexOp::Atomic(_)) {
+            return Err(Unsupported::not_implemented(Feature::Format).into());
+        }
+        if matches!(t.op, TexOp::Read | TexOp::Write) {
+            cx.families.arith.converts(form);
+        }
+    }
+    match t.op {
+        TexOp::IsNull => {
+            let index = match image {
+                ImageRef::Slot(index) => index,
+                ImageRef::Heap { handle, .. } => {
+                    return Ok(TextureStrategy::HeapIsNull { handle });
+                }
+            };
+            if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+                s.presence = true;
+            }
+            // Under the identity domains the slot's resource ID says it (`emit::identity_id`).
+            if !crate::lower::access::identity(cx.profile) {
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::ResourcePresence {
+                        slot: SlotRef {
+                            stage: cx.stage,
+                            class: SlotClass::Texture,
+                            index,
+                        },
+                    });
+            }
+            Ok(TextureStrategy::IsNull { index })
+        }
+        TexOp::Query(q) => select_query(cx, ops, image, shape, q),
+        TexOp::Read => {
+            let (form, _) = texel.ok_or_else(refuse)?;
+            let class = texel.map(|(_, c)| c);
+            select_read(cx, (at, inst), ops, (image, shape, form), class, m)
+        }
+        TexOp::Write => {
+            let (form, _) = texel.ok_or_else(refuse)?;
+            select_write(cx, ops, (image, shape, form), m)
+        }
+        TexOp::Atomic(op) => {
+            let texel = texel.ok_or_else(refuse)?;
+            atomic::select(cx, (at, inst), op, ops, (image, shape), texel)
+        }
+        _ => Err(refuse()),
+    }
+}
+
+fn coord(cx: &SelectCx<'_>, ops: &Operands<'_>, shape: ImageShape) -> Result<Coord, Error> {
+    let plane = ops
+        .get(TexRole::Coord)
+        .ok_or_else(|| cx.invariant("a texture access without a coordinate"))?;
+    let layer = match ops.get(TexRole::Layer) {
+        Some(v) => Some(id(cx, v)?),
+        None => None,
+    };
+    let face = match ops.get(TexRole::Face) {
+        Some(v) => Some(id(cx, v)?),
+        None => None,
+    };
+    Ok(Coord {
+        plane: id(cx, plane)?,
+        lanes: plane_lanes(shape.dim),
+        layer,
+        face,
+    })
+}
+
+/// A level operand that must be the constant 0: a multisampled image and a texture buffer have
+/// one level, and a heap storage element is a view of its texture's base level.
+fn level_zero(cx: &SelectCx<'_>, ops: &Operands<'_>) -> Result<(), Error> {
+    match ops.get(TexRole::Lod) {
+        None => Ok(()),
+        Some(v) if const_int(cx, v) == Some(0) => Ok(()),
+        Some(_) => Err(refuse()),
+    }
+}
+
+/// The level operand of a storage access on `image`: `None` for the constant 0 (or none), which
+/// every view's base level is; any other level indexes the slot's level views, which it marks. A
+/// heap storage element takes only the constant 0.
+fn storage_level(
+    cx: &mut SelectCx<'_>,
+    ops: &Operands<'_>,
+    image: ImageRef,
+) -> Result<Option<ValueId>, Error> {
+    let Some(v) = ops.get(TexRole::Lod) else {
+        return Ok(None);
+    };
+    let constant = const_int(cx, v);
+    if constant == Some(0) {
+        return Ok(None);
+    }
+    if image.heap() {
+        return Err(refuse());
+    }
+    let level = id(cx, v)?;
+    mark(cx, image, |u| {
+        u.level_views = true;
+        match constant {
+            Some(k) => u.top_level = u.top_level.max(k),
+            None => u.dynamic_level = true,
+        }
+    });
+    Ok(Some(level))
+}
+
+fn select_read(
+    cx: &mut SelectCx<'_>,
+    (at, inst): (InstId, &Inst),
+    ops: &Operands<'_>,
+    (image, shape, texel): (ImageRef, ImageShape, TexelForm),
+    class: Option<TexelClass>,
+    m: &mut Meter,
+) -> Result<TextureStrategy, Error> {
+    let mut r = select_read_as(cx, (at, inst), ops, (image, shape, texel), None, m)?;
+    // A sampled color heap group's read of one sample reads a member of another numeric class in
+    // that class, its words handed back as declared, as Metal reads it (the probe's argument
+    // buffer half, the slot's rule): one sibling read per other class.
+    let (storage, _) = image_access(cx, image)?;
+    let crosses = tabled(cx, image)
+        && !storage
+        && !shape.ms
+        && !shape.depth
+        && shape.dim != ImageDim::Buffer
+        && !r.residency
+        && matches!(texel.conv, TexelConv::F32 | TexelConv::F16 | TexelConv::I32);
+    if let (false, true, ImageRef::Heap { group, .. }) = (crosses, tabled(cx, image), image) {
+        if let Some(h) = cx.families.texture.heap.get_mut(&group) {
+            h.uncrossed = true;
+        }
+    }
+    if let (true, ImageRef::Heap { group, .. }, Some(own)) = (crosses, image, class) {
+        for k in [TexelClass::Float, TexelClass::Sint, TexelClass::Uint] {
+            if k == own {
+                continue;
+            }
+            let sibling = select_read_as(cx, (at, inst), ops, (image, shape, texel), Some(k), m)?;
+            r.heap_cross.push(sibling);
+            if let Some(h) = cx.families.texture.heap.get_mut(&group) {
+                h.cross_reads.insert(k);
+            }
+        }
+        cx.families.access.heap_class_index = true;
+    }
+    Ok(TextureStrategy::Read(r))
+}
+
+/// The read of `image` (`select_read`), or, for `as_class`, its sibling reading a heap member in
+/// that other numeric class (`Read::heap_class`).
+fn select_read_as(
+    cx: &mut SelectCx<'_>,
+    (at, inst): (InstId, &Inst),
+    ops: &Operands<'_>,
+    (image, shape, texel): (ImageRef, ImageShape, TexelForm),
+    as_class: Option<TexelClass>,
+    m: &mut Meter,
+) -> Result<Read, Error> {
+    // The depth word's only observed value is 1; any other is not modelled.
+    if let Some(w) = ops.get(TexRole::DepthWord) {
+        if const_int(cx, w) != Some(1) {
+            return Err(refuse());
+        }
+    }
+    // A texture of another class, read in its own class, its words handed back as declared.
+    mark_result(cx, image, texel);
+    let bound = match as_class {
+        Some(k) => Some(k),
+        None => cross_class(cx, image)?,
+    };
+    let (texel, declared) = match bound {
+        Some(bound) => match native_form(texel, bound) {
+            Some(native) => (native, Some(texel.conv)),
+            None => return Err(Unsupported::not_implemented(Feature::Format).into()),
+        },
+        None => (texel, None),
+    };
+    let through = read_through(cx, ops, m)?;
+    // A cube's read through a sampler clamps nothing: the M3 reads zero at a coordinate past the
+    // face's extent at the read's level, and the base level's texel at one within it. That read
+    // is not built, so it is refused.
+    if through.is_some() && shape.dim == ImageDim::Cube {
+        return Err(refuse());
+    }
+    // Metal 4.1's `sparse_read(sampler s, ...)` is a read through a sampler whose status word the
+    // function observes. What the sampler's addressing does to the residency of a sparse
+    // texture's texels the specification does not say, and the M3 measured it only over a
+    // texture that is not sparse (resident throughout), so it is refused.
+    if through.is_some() && status_use(cx, at).is_some() {
+        return Err(refuse());
+    }
+    if let Some(t) = through {
+        select_through(cx, image, texel, t)?;
+        if let ImageRef::Slot(index) = image {
+            not_parts(cx, index);
+        }
+    }
+    let residency = residency(cx, at, image)?;
+    let (storage, write_only) = image_access(cx, image)?;
+    if write_only {
+        return Err(refuse());
+    }
+    let level = if shape.ms || shape.dim == ImageDim::Buffer {
+        level_zero(cx, ops)?;
+        None
+    } else if storage {
+        storage_level(cx, ops, image)?
+    } else {
+        match ops.get(TexRole::Lod) {
+            Some(v) => Some(id(cx, v)?),
+            None => return Err(cx.invariant("a sampled read without a level")),
+        }
+    };
+    let sample = match ops.get(TexRole::SampleIndex) {
+        Some(v) => Some(id(cx, v)?),
+        None => None,
+    };
+    let at_ = coord(cx, ops, shape)?;
+    let result = cx.lowered_repr(Value::Inst(at), inst.ty)?;
+    // An extended-range texel is decoded from its raw code, so the device's out-of-bounds texel
+    // (raw zero) is not Metal's (zero, measured): the shader selects it.
+    let extended = extended_range(cx, image)?;
+    if extended.is_some() && residency {
+        return Err(Unsupported::not_implemented(Feature::Format).into());
+    }
+    let check = match slot::read_check(cx, shape.dim == ImageDim::Buffer) {
+        ReadCheck::Device if extended.is_some() => ReadCheck::Shader,
+        c => c,
+    };
+    // A storage read at a level reads the slot's level views, and past the bound level count
+    // selects Metal's out-of-bounds texel on every profile.
+    let level_views = storage && level.is_some();
+    // Metal 4.1's reads of a `read_write` texture through a sampler take no level (AIR passes the
+    // constant 0), so one at a level its function computes is not built.
+    if level_views && through.is_some() {
+        return Err(refuse());
+    }
+    // Metal's out-of-bounds alpha is the bound format's (1 where it has none): a read the shader
+    // checks, or tests against its level views, whose alpha the function observes takes it from the
+    // slot's specialization, or from a heap element's handle-table entry. So does one whose
+    // residency it observes, under either of its slot's arms: a texel that is not resident reads
+    // Metal's unmapped value, zero memory as the bound format reads it, which is the out-of-bounds
+    // texel, where a device's block that holds no mapped tile reads the device's value. A texture
+    // buffer's swizzle applies to its reads: Metal returns each channel from the source the bound
+    // texture buffer's swizzle names, out of bounds too. A `ulong` read's swizzle is not measured;
+    // the binder refuses a swizzled texture buffer there. Under the identity domains the runtime
+    // makes no swizzled texture buffer, so the read takes none.
+    let swizzle = matches!(image, ImageRef::Slot(_))
+        && shape.dim == ImageDim::Buffer
+        && !matches!(texel.conv, TexelConv::U64Words { .. })
+        && !crate::lower::access::identity(cx.profile);
+    // A storage slot bound to a swizzled texture applies the swizzle under its variant, to the
+    // converted texel, out of bounds too, as plain Metal reads it. A `ulong` texel's swizzle, and a
+    // read of fewer lanes, are not measured. So does an extended-range sampled slot of the variant,
+    // to the decoded texel. So does a packed normalized sampled slot of the
+    // variant, to the texel its class converts: the variant holds no other sampled slot.
+    let storage_swizzle = shape.dim != ImageDim::Buffer && swizzled_storage(cx, image)?;
+    if storage_swizzle && (texel.lanes != 4 || matches!(texel.conv, TexelConv::U64Words { .. })) {
+        return Err(Unsupported::not_implemented(Feature::TextureSwizzle).into());
+    }
+    // A `ulong` read's lanes past the first are Metal's constants `(0, 0, 1)` in and out of
+    // bounds, never the image's. A swizzled read may return the alpha in any lane, so it observes
+    // the alpha wherever the function reads a lane.
+    let observed = (check == ReadCheck::Shader || level_views || residency)
+        && texel.lanes == 4
+        && !matches!(texel.conv, TexelConv::U64Words { .. })
+        && (swizzle || storage_swizzle || alpha_read(cx, at));
+    let alpha = match image {
+        ImageRef::Slot(index) if observed => {
+            let slot = slot_of(cx, index)?.slot;
+            if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+                s.oob_alpha = true;
+            }
+            // Under the identity domains the slot's resource ID's word says it
+            // (`TextureWord::OUT_OF_BOUNDS_ALPHA_ONE`).
+            if !crate::lower::access::identity(cx.profile) {
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::OutOfBoundsAlpha { slot });
+            }
+            true
+        }
+        // A heap element's format is the resident texture's: its handle-table entry's flags say
+        // whether it has alpha, which the search then carries in the handle.
+        ImageRef::Heap { .. } if observed => {
+            cx.families.access.heap_alpha = true;
+            true
+        }
+        _ => false,
+    };
+    // An 8-bit sRGB texel's codes, under the slot's twin variant, decoded by the device's
+    // transfer; another `half` texel converts by the bound format's class, and its NaN is the
+    // device's decode.
+    let raw =
+        matches!(texel.conv, TexelConv::F16 | TexelConv::F32) && srgb_texels(cx, image, shape, m)?;
+    // A storage slot's 8-bit sRGB codes, through its UNORM alias, decoded by the device's
+    // transfer, as a UNORM twin's are.
+    let srgb_codes = storage
+        && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
+        && matches!(
+            storage_class(cx, image)?,
+            StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra
+        );
+    if srgb_codes {
+        cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+    }
+    // An `RGB9E5Float` slot's word through its `R32_UINT` alias, decoded exactly (the slot's
+    // planning declares it).
+    let words = storage
+        && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
+        && storage_class(cx, image)? == StorageImageClass::SharedExponentBits;
+    // The shader decodes these texels itself, recording its own notes. An extended-range texel is
+    // decoded exactly to `f32`, which a `half` result rounds to nearest even, as Metal answers. A
+    // read is one texel.
+    let decoded = raw || srgb_codes || words;
+    // A `half` texel is the device's `f32` texel rounded to nearest even.
+    if texel.conv == TexelConv::F16 && !decoded && extended.is_none() {
+        cx.precision.insert(PrecisionNote::HalfTexelConversion);
+        half_texel_nans(cx, image, shape, m)?;
+    }
+    if texel.conv == TexelConv::F32 && !decoded && extended.is_none() {
+        float_texel_notes(cx, image, shape, true);
+    }
+    // A float read of a sampled heap group of one sample decodes a member of a form a heap reads
+    // where its handle names one, from the group's unsigned integer class.
+    let heap_raw = match image {
+        ImageRef::Heap { group, .. }
+            if tabled(cx, image)
+                && !storage
+                && as_class.is_none()
+                && !shape.ms
+                && shape.dim != ImageDim::Buffer
+                && texel.lanes == 4
+                && matches!(texel.conv, TexelConv::F32 | TexelConv::F16) =>
+        {
+            heap_raw::plan(cx, group, &[texel.conv == TexelConv::F16], m)?;
+            true
+        }
+        _ => false,
+    };
+    if let (true, ImageRef::Slot(index)) = (swizzle || storage_swizzle, image) {
+        swizzles(cx, index)?;
+    }
+    let heap_alpha_red = storage && heap_alpha_in_red(cx, image, shape, texel.conv);
+    let heap_conversions = match storage {
+        true => heap_storage_conversions(cx, image, shape, texel.conv),
+        false => HeapConversions::default(),
+    };
+    let heap_unreadable = storage && heap_unreadable(cx, image);
+    // A member's 8-bit sRGB codes, through its UNORM alias, decoded by the device's transfer, as
+    // a storage slot's are.
+    if !heap_conversions.srgb.is_empty() {
+        cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+    }
+    // Where the profile's sparse textures are sparse images, a block of one that holds no mapped
+    // tile reads the device's value (RADV's alpha 0), where Metal reads a channel the format
+    // lacks as its constant: a color read of four 32-bit held lanes sets them after it, whether
+    // the function reads its residency or not.
+    let sparse_images = cx
+        .profile
+        .fields()
+        .enabled
+        .features
+        .contains(&crate::device::requirements::VkFeature::ShaderResourceResidency);
+    // Under the identity domains no texture is sparse (the consumer refuses one).
+    let constant_lanes = match image {
+        ImageRef::Slot(index)
+            if sparse_images
+                && !crate::lower::access::identity(cx.profile)
+                && shape.dim != ImageDim::Buffer
+                && texel.lanes == 4
+                && !matches!(texel.conv, TexelConv::U64Words { .. }) =>
+        {
+            if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+                s.constant_lanes = true;
+                let slot = s.slot;
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::ConstantLanes { slot });
+            }
+            true
+        }
+        _ => false,
+    };
+    mark(cx, image, |u| u.read = true);
+    Ok(Read {
+        image,
+        at: at_,
+        level,
+        level_views,
+        sample,
+        texel,
+        result,
+        residency,
+        check,
+        alpha,
+        through,
+        raw,
+        srgb_codes,
+        swizzle,
+        storage_swizzle,
+        extended,
+        heap_raw,
+        heap_alpha_red,
+        heap_conversions,
+        heap_unreadable,
+        constant_lanes,
+        declared,
+        heap_class: as_class,
+        heap_cross: Vec::new(),
+    })
+}
+
+/// The addressing of read `ops`. Metal's sampler-less `read` passes the front end's read sampler
+/// (`air.get_read_sampler`), which addresses nothing, and a zero offset. Metal 4.1's `read(sampler
+/// s, ...)` passes `s` and its offset, a [`Through`] read of `s`'s state: a constexpr sampler's
+/// fields, a runtime `[[sampler(n)]]`'s word, or an argument buffer's sampler's table entry. A
+/// sampler of several candidates, or the null or absent one, is refused. The specification's
+/// overloads take `int` coordinates and offsets; a narrower lane, which lowering holds
+/// zero-extended, has no overload whose meaning it could take, so it is refused too.
+fn read_through(
+    cx: &SelectCx<'_>,
+    ops: &Operands<'_>,
+    m: &mut Meter,
+) -> Result<Option<Through>, Error> {
+    let offset = ops.get(TexRole::Offset).filter(|o| !is_zero(cx, *o));
+    let sampler = match ops.get(TexRole::Sampler) {
+        None => None,
+        Some(s) if read_sampler(cx, s) => None,
+        Some(s) => {
+            let sampler = match crate::lower::access::handle::heap_sampler_target(cx, s)? {
+                Some(h) => ReadSampler::Heap(h),
+                None => match crate::lower::access::handle::sampler_target(cx, s, m)? {
+                    HandleTarget::One(Candidate::Constexpr { global, .. }) => {
+                        let Some((_, state)) =
+                            cx.entry.static_samplers.iter().find(|(g, _)| *g == global)
+                        else {
+                            return Err(cx.invariant("a constexpr sampler without its state"));
+                        };
+                        constant_read_sampler(state)
+                    }
+                    HandleTarget::One(Candidate::Sampler(n)) => ReadSampler::Slot(n),
+                    _ => return Err(refuse()),
+                },
+            };
+            let int = |v: Value| {
+                cx.value_ty(v)
+                    .and_then(|t| cx.entry.module.types().int_bits(t))
+                    == Some(32)
+            };
+            let coordinate = ops.get(TexRole::Coord).is_some_and(int);
+            if !coordinate || ops.get(TexRole::Offset).is_some_and(|o| !int(o)) {
+                return Err(refuse());
+            }
+            Some(sampler)
+        }
+    };
+    match (sampler, offset) {
+        (Some(sampler), o) => Ok(Some(Through {
+            offset: o.map(|o| id(cx, o)).transpose()?,
+            sampler,
+        })),
+        (None, None) => Ok(None),
+        // A sampler-less read has no offset.
+        (None, Some(_)) => Err(refuse()),
+    }
+}
+
+/// The addressing of constexpr sampler state `state` for a read: its fields that address one
+/// texel. Its filters, coordinates, comparison, anisotropy, reduction, LOD clamp and bias change
+/// nothing (module docs). AIR holds `clamp_to_border` with a transparent black border as
+/// `clamp_to_zero`, which reads that color.
+fn constant_read_sampler(state: &crate::air::abi::SamplerState) -> ReadSampler {
+    use crate::air::abi::{AddressMode, BorderColor, MipFilter};
+    use crate::metal::SamplerBorderColor;
+    let border = [state.address_s, state.address_t, state.address_r]
+        .map(|a| matches!(a, AddressMode::ClampToZero | AddressMode::ClampToBorder));
+    let color = match state.border_color {
+        BorderColor::TransparentBlack => SamplerBorderColor::TransparentBlack,
+        BorderColor::OpaqueBlack => SamplerBorderColor::OpaqueBlack,
+        BorderColor::OpaqueWhite => SamplerBorderColor::OpaqueWhite,
+    };
+    ReadSampler::Constant {
+        border,
+        color: color.as_raw(),
+        mip: state.mip_filter != MipFilter::None,
+    }
+}
+
+/// Plan what read through a sampler `t` of `image` reads besides the image: a runtime slot's
+/// word (`RuntimeSlot::reads`), and where an index outside the level may read the border texel, a
+/// slot's `BorderTexels` specialization (`RuntimeFact::BorderTexels`; under the identity domains
+/// its resource ID's word holds them, `emit::identity_id`), or a heap element's handle-table
+/// entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the module's search then names by its
+/// index in the handle (`AccessPlan::heap_border`). A `ulong` texel's border, which is not
+/// measured, is not implemented.
+fn select_through(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    texel: TexelForm,
+    t: Through,
+) -> Result<(), Error> {
+    if let ReadSampler::Slot(n) = t.sampler {
+        match cx.families.sampler.slots.get_mut(&n) {
+            Some(s) => s.reads = true,
+            None => return Err(cx.invariant("an unplanned sampler slot")),
+        }
+    }
+    if !t.sampler.bordered() {
+        return Ok(());
+    }
+    if matches!(texel.conv, TexelConv::U64Words { .. }) {
+        return Err(Unsupported::not_implemented(Feature::Lowering(LowerFamily::Texture)).into());
+    }
+    match image {
+        ImageRef::Slot(_) if crate::lower::access::identity(cx.profile) => Ok(()),
+        ImageRef::Slot(index) => {
+            let Some(s) = cx.families.texture.slots.get_mut(&index) else {
+                return Err(cx.invariant("an unplanned texture slot"));
+            };
+            s.border_texels = true;
+            let slot = s.slot;
+            cx.facts
+                .insert(crate::pipeline::facts::RuntimeFact::BorderTexels { slot });
+            Ok(())
+        }
+        ImageRef::Heap { .. } => {
+            cx.families.access.heap_border = true;
+            Ok(())
+        }
+    }
+}
+
+/// Whether `v` is the front end's read sampler (`air.get_read_sampler`).
+fn read_sampler(cx: &SelectCx<'_>, v: Value) -> bool {
+    let Value::Inst(i) = v else {
+        return false;
+    };
+    cx.body.insts.get(i).is_some_and(|inst| {
+        matches!(
+            &inst.kind,
+            InstKind::Call(c) if matches!(
+                c.callee,
+                Callee::Air { op: AirIntrinsic::Sampler(SamplerOp::GetReadSampler), .. }
+            )
+        )
+    })
+}
+
+/// Whether the alpha of four-lane read `at` is observed ([`alpha::observed`]).
+fn alpha_read(cx: &mut SelectCx<'_>, at: InstId) -> bool {
+    if cx.families.texture.alpha_read.is_none() {
+        let observed = alpha::observed(cx, cx.body);
+        cx.families.texture.alpha_read = Some(observed);
+    }
+    cx.families
+        .texture
+        .alpha_read
+        .as_ref()
+        .is_some_and(|s| s.contains(&at))
+}
+
+fn slot_of<'a>(cx: &'a SelectCx<'_>, index: u32) -> Result<&'a SlotPlan, Error> {
+    cx.families
+        .texture
+        .slots
+        .get(&index)
+        .ok_or_else(|| cx.invariant("an unplanned texture slot"))
+}
+
+fn select_write(
+    cx: &mut SelectCx<'_>,
+    ops: &Operands<'_>,
+    (image, shape, texel): (ImageRef, ImageShape, TexelForm),
+    m: &mut Meter,
+) -> Result<TextureStrategy, Error> {
+    if !image_access(cx, image)?.0 {
+        return Err(refuse());
+    }
+    let level = if shape.ms || shape.dim == ImageDim::Buffer {
+        level_zero(cx, ops)?;
+        None
+    } else {
+        storage_level(cx, ops, image)?
+    };
+    slot::stage_stores(cx)?;
+    let value = ops
+        .get(TexRole::Value)
+        .ok_or_else(|| cx.invariant("a texture write without a value"))?;
+    if matches!(value, Value::Const(_)) && cx.constant(value).is_none() {
+        return Err(Unsupported::not_implemented(Feature::Lowering(LowerFamily::Arith)).into());
+    }
+    let at = coord(cx, ops, shape)?;
+    // A texture of another class: the declared lanes turned into its own class's texel, as plain
+    // Metal stores them, then written as that class writes.
+    let (texel, cross) = match cross_class(cx, image)? {
+        Some(bound) => {
+            let format = match image {
+                ImageRef::Slot(index) => {
+                    let slot = slot_of(cx, index)?.slot;
+                    // The bound image's own format: an alias view's image (an `RGB9E5Float`
+                    // texture written through its `R32_UINT` view), else the declared one.
+                    cx.inputs
+                        .storage_images
+                        .get(&slot)
+                        .map(|c| c.alias.map_or(c.vk_format, |a| a.image_format))
+                        .filter(|f| *f != crate::vk::Format::UNDEFINED)
+                }
+                ImageRef::Heap { .. } => None,
+            };
+            let Some(format) = format else {
+                return Err(cx.invariant("a cross-class write without its declared format"));
+            };
+            match native_write_form(texel, bound, format) {
+                Some(native) => (
+                    native,
+                    Some(CrossWrite {
+                        declared: texel.conv,
+                        format,
+                    }),
+                ),
+                None => return Err(Unsupported::not_implemented(Feature::Format).into()),
+            }
+        }
+        None => (texel, None),
+    };
+    let guard = slot::write_guard(cx, shape.dim == ImageDim::Buffer);
+    let extended = extended_range(cx, image)?;
+    let class = storage_class(cx, image)?;
+    mode_rounded_write(cx, image, texel, extended.is_some())?;
+    // Its alpha in red where the class is `A8Unorm`'s and the device holds such a texture so.
+    let heap_alpha_red = heap_alpha_in_red(cx, image, shape, texel.conv);
+    // A member's 8-bit sRGB codes, through its UNORM alias, encoded by the device's conversion
+    // (`emit::srgb_codes`), as a storage slot's are.
+    let heap_conversions = heap_storage_conversions(cx, image, shape, texel.conv);
+    if !heap_conversions.srgb.is_empty() {
+        cx.precision.insert(PrecisionNote::DevicePackConversion);
+    }
+    // A constant texel none of whose lanes is a NaN stores none, whatever the device's encoding.
+    let nans = !holds_no_nan(cx, value);
+    if texel.conv == TexelConv::F32 {
+        half_storage_facts(cx, image, (class, cross.is_some(), nans), m)?;
+    }
+    if texel.conv == TexelConv::F16 && extended.is_none() && nans {
+        half_write_nans(cx, image, m)?;
+    }
+    // A `half` texel's too, held widened: Metal stores its value by the same rule.
+    if matches!(texel.conv, TexelConv::F32 | TexelConv::F16) && extended.is_none() {
+        norm_storage_facts(cx, image)?;
+    }
+    // A storage slot bound to a swizzled texture stores each channel from the lane the swizzle
+    // takes it to, under its variant, as plain Metal writes it. A `ulong` texel's is not measured.
+    let swizzle = shape.dim != ImageDim::Buffer && swizzled_storage(cx, image)?;
+    if swizzle && (texel.lanes != 4 || matches!(texel.conv, TexelConv::U64Words { .. })) {
+        return Err(Unsupported::not_implemented(Feature::TextureSwizzle).into());
+    }
+    if let (true, ImageRef::Slot(index)) = (swizzle, image) {
+        swizzles(cx, index)?;
+    }
+    let saturate = match extended {
+        Some(_) => IntRange::Full,
+        None => int_range(cx, image, texel)?,
+    };
+    mark(cx, image, |u| u.write = true);
+    Ok(TextureStrategy::Write(Write {
+        image,
+        at,
+        level,
+        value: id(cx, value)?,
+        texel,
+        guard,
+        extended,
+        class,
+        heap_alpha_red,
+        heap_conversions,
+        swizzle,
+        cross,
+        saturate,
+    }))
+}
+
+/// How a write of `texel` (the image's own class's form) to `image` saturates its lanes
+/// ([`IntRange`]): an integer texel's to the widths of the format the slot's storage choice
+/// declares, or, where it declares none, to those the binder pushes for the bound texture. A
+/// 16-bit lane, held extended to the word by the image's signedness, needs no saturation into a
+/// channel of 16 bits or more. A heap element's write is not saturated: its handle names no
+/// integer format's widths (the classes), so the device's conversion stores its out-of-range lanes.
+fn int_range(cx: &mut SelectCx<'_>, image: ImageRef, texel: TexelForm) -> Result<IntRange, Error> {
+    let narrowest = match texel.conv {
+        TexelConv::I32 => 32,
+        TexelConv::I16 { .. } => 16,
+        _ => return Ok(IntRange::Full),
+    };
+    let ImageRef::Slot(index) = image else {
+        return Ok(IntRange::Full);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    let declared = cx
+        .inputs
+        .storage_images
+        .get(&slot)
+        .map(|c| c.alias.map_or(c.vk_format, |a| a.image_format))
+        .filter(|f| *f != crate::vk::Format::UNDEFINED);
+    let Some(format) = declared else {
+        mark(cx, image, |u| u.int_channels = true);
+        return Ok(IntRange::SlotWord(slot));
+    };
+    let lanes = usize::from(texel.lanes).min(4);
+    Ok(match crate::metal::format::integer_channel_bits(format) {
+        Some(bits) if bits.iter().take(lanes).any(|b| *b < narrowest) => IntRange::Widths(bits),
+        _ => IntRange::Full,
+    })
+}
+
+fn select_query(
+    cx: &mut SelectCx<'_>,
+    ops: &Operands<'_>,
+    image: ImageRef,
+    shape: ImageShape,
+    q: Query,
+) -> Result<TextureStrategy, Error> {
+    let storage = image_access(cx, image)?.0;
+    let kind = match q {
+        Query::Width => QueryKind::Size { component: 0 },
+        Query::Height => QueryKind::Size { component: 1 },
+        Query::Depth => QueryKind::Size { component: 2 },
+        Query::ArraySize => QueryKind::ArraySize,
+        // Metal has no mipmapped 1D textures: `get_num_mip_levels` of a 1D texture or 1D texture
+        // array always returns 0 (MSL 4.1, their member functions), sampled or not.
+        Query::NumMipLevels if shape.dim == ImageDim::D1 => QueryKind::NoLevels,
+        // A storage image's level count is not queryable (VUID-StandaloneSpirv-
+        // OpImageQuerySizeLod-04659): the binder pushes the bound texture's. A heap element has no
+        // slot to push it for.
+        Query::NumMipLevels if storage && image.heap() => return Err(refuse()),
+        Query::NumMipLevels if storage => {
+            mark(cx, image, |u| u.levels = true);
+            QueryKind::Levels
+        }
+        Query::NumMipLevels => QueryKind::Levels,
+        Query::NumSamples => QueryKind::Samples,
+        // Canonicalization reads each from the third hidden buffer of a kernel compiled in OpenCL
+        // mode (`air::canon::opencl`); no other pipeline has the table, and Metal makes no other
+        // pipeline of a function that queries it.
+        Query::ChannelOrder | Query::ChannelDataType => return Err(refuse()),
+    };
+    // A size query at a level that is not the constant 0 answers from the image's first level
+    // (`emit::level_extent`), as Metal does at every level: it queries no level the image may
+    // lack, and a storage slot no level view. A heap storage element takes only the constant 0.
+    let level = match kind {
+        QueryKind::Size { .. } if !shape.ms && shape.dim != ImageDim::Buffer => {
+            match ops.get(TexRole::Lod) {
+                Some(v) if const_int(cx, v) == Some(0) => None,
+                Some(_) if storage && image.heap() => return Err(refuse()),
+                Some(v) => Some(id(cx, v)?),
+                None if storage => None,
+                None => return Err(cx.invariant("a size query without a level")),
+            }
+        }
+        QueryKind::Size { .. } => {
+            level_zero(cx, ops)?;
+            None
+        }
+        _ => None,
+    };
+    // A sampled heap group's query of one sample reads a member of a form a heap reads through
+    // the group's unsigned integer class, where its handle names one.
+    let heap_raw = match image {
+        ImageRef::Heap { group, .. }
+            if tabled(cx, image) && !storage && !shape.ms && shape.dim != ImageDim::Buffer =>
+        {
+            if let Some(h) = cx.families.texture.heap.get_mut(&group) {
+                h.reads_raw = true;
+            }
+            cx.families.access.heap_class_index = true;
+            true
+        }
+        _ => false,
+    };
+    // And a member of another numeric class, through the group's array of that class.
+    let heap_cross = match image {
+        ImageRef::Heap { group, .. } if heap_raw && !shape.depth => {
+            if let Some(h) = cx.families.texture.heap.get_mut(&group) {
+                h.cross_queries = true;
+            }
+            true
+        }
+        ImageRef::Heap { group, .. } if tabled(cx, image) => {
+            if let Some(h) = cx.families.texture.heap.get_mut(&group) {
+                h.uncrossed = true;
+            }
+            false
+        }
+        _ => false,
+    };
+    let volume = shape.dim == ImageDim::D3
+        && !shape.array
+        && matches!(
+            extended_range(cx, image)?,
+            Some(crate::metal::format::ExtendedRange::Planes { .. })
+        );
+    mark(cx, image, |u| u.query = true);
+    Ok(TextureStrategy::Query(QueryOp {
+        image,
+        kind,
+        level,
+        heap_raw,
+        heap_cross,
+        volume,
+    }))
+}

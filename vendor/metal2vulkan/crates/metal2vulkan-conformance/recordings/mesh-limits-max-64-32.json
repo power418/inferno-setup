@@ -1,0 +1,278 @@
+{
+  "format": 1,
+  "case": "mesh-limits-max-64-32",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "mesh_pipeline_limits.ll",
+      "entry": "mesh_pipeline_limits_object",
+      "source_sha256": "baf458800da7dd5691b9b47d29a3273e64fa0da2babb824520e6f2ac40e893c4"
+    },
+    {
+      "fixture": "mesh_pipeline_limits.air.ll",
+      "entry": "mesh_pipeline_limits_object",
+      "source_sha256": "a2ef527bd774614156dc4ac4280c06e74c46bca80038b7600e39dabd759c229c"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "baf458800da7dd5691b9b47d29a3273e64fa0da2babb824520e6f2ac40e893c4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a2ef527bd774614156dc4ac4280c06e74c46bca80038b7600e39dabd759c229c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "descriptor",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a9d8adc996802745e7f3912c3f0cf102210bf11d1d1330eac6bd60b5f178b0cc"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "created",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "refused",
+                      "observed": {
+                        "value": {
+                          "bool": false
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_object_threadgroup",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Some",
+                            "payload": {
+                              "uint": 64
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_mesh_threadgroup",
+                      "observed": {
+                        "value": {
+                          "uint": 32
+                        }
+                      }
+                    },
+                    {
+                      "name": "object_thread_execution_width",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Some",
+                            "payload": {
+                              "uint": 32
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "mesh_thread_execution_width",
+                      "observed": {
+                        "value": {
+                          "uint": 32
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threadgroups_per_mesh_grid",
+                      "observed": {
+                        "value": {
+                          "uint": 1048576
+                        }
+                      }
+                    },
+                    {
+                      "name": "required_threads_per_object_threadgroup",
+                      "observed": {
+                        "value": {
+                          "fields": {
+                            "depth": {
+                              "uint": 0
+                            },
+                            "height": {
+                              "uint": 0
+                            },
+                            "width": {
+                              "uint": 0
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "required_threads_per_mesh_threadgroup",
+                      "observed": {
+                        "value": {
+                          "fields": {
+                            "depth": {
+                              "uint": 0
+                            },
+                            "height": {
+                              "uint": 0
+                            },
+                            "width": {
+                              "uint": 0
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "max_total_threads_per_threadgroup",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 30.12 and ours at 38.41; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 413,
+      "times": {
+        "case": "mesh-limits-max-64-32",
+        "calls": 2,
+        "in_calls": 56139417,
+        "on_cpu": 1226500,
+        "blocked": 54766083,
+        "elsewhere": 2917,
+        "spend": 56142334,
+        "spend_least": 46343251,
+        "spend_most": 83293584,
+        "per_call": [
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 55780750,
+            "on_cpu": 888917,
+            "blocked": 54766083,
+            "wall_least": 46107459,
+            "wall_most": 82927792,
+            "wall_total": 55780750,
+            "on_cpu_total": 888917,
+            "blocked_total": 54766083
+          },
+          {
+            "call": "mesh_pipeline_limits",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 234375,
+            "on_cpu": 234750,
+            "blocked": 0,
+            "wall_least": 226417,
+            "wall_most": 367083,
+            "wall_total": 234375,
+            "on_cpu_total": 234750,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

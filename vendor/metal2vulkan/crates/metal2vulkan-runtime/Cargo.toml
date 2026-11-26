@@ -1,0 +1,45 @@
+[package]
+name = "metal2vulkan-runtime"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The Metal API on Vulkan, with one path for every device"
+readme = "README.md"
+repository.workspace = true
+documentation = "https://docs.rs/metal2vulkan-runtime"
+keywords = ["metal", "vulkan", "gpu", "graphics"]
+categories = ["graphics", "api-bindings"]
+autobins = false
+autoexamples = false
+
+[lib]
+name = "metal2vulkan_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+# The Vulkan API. Nothing is linked at build time: the instance opens the loader with `dlopen`.
+ash = { workspace = true, features = ["std", "loaded"] }
+# The translator: Metal AIR to SPIR-V, through its public API only.
+metal2vulkan = { version = "=0.2.0", path = "../metal2vulkan", features = ["ash"] }
+# The stage keys of kernels past the stage bound, and the digest of a device's enables.
+sha2.workspace = true
+
+# The host clock of command buffer times, and the ids of the runtime's threads, on unix.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# The same on Windows: the performance counter and `GetCurrentThreadId`.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Performance", "Win32_System_Threading"] }
+
+[dev-dependencies]
+# The tests' fixture assembler and fixture directories. Path-only, so publishing drops it.
+metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
+# The floor profile's reader (`tests::floor`).
+serde_json.workspace = true
+
+# The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)"] }

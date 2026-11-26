@@ -1,0 +1,95 @@
+/*
+ * Apple RTKit.
+ *
+ * Copyright (c) 2023-2026 Visual Ehrmanntraut (VisualEhrmanntraut).
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include "qemu/osdep.h"
+#include "hw/misc/a7iop/core.h"
+#include "util/mlib.h"
+
+#define TYPE_APPLE_RTKIT "apple-rtkit"
+OBJECT_DECLARE_TYPE(AppleRTKit, AppleRTKitClass, APPLE_RTKIT)
+
+typedef void AppleRTKitEPHandler(void* opaque, uint8_t ep, uint64_t msg);
+
+typedef struct
+{
+    void*                opaque;
+    AppleRTKitEPHandler* handler;
+    bool                 user;
+} AppleRTKitEPData;
+
+static inline size_t apple_rtkit_ep_table_key_hash(uint16_t x) { return (size_t)x; }
+
+static inline void apple_rtkit_ep_table_oor_set(uint16_t* k, uint8_t n) { *k = 0xFFFFU - (uint16_t)n; }
+
+static inline bool apple_rtkit_ep_table_oor_equal(uint16_t k, uint8_t n) { return k == 0xFFFFU - (uint16_t)n; }
+
+DICT_OA_DEF2(AppleRTKitEPTable, uint16_t,
+             M_OPEXTEND(M_BASIC_OPLIST, HASH(apple_rtkit_ep_table_key_hash), OOR_EQUAL(apple_rtkit_ep_table_oor_equal),
+                        OOR_SET(apple_rtkit_ep_table_oor_set M_IPTR)),
+             AppleRTKitEPData, M_POD_OPLIST)
+
+typedef struct
+{
+    void (*start)(void* opaque);
+    void (*wakeup)(void* opaque);
+    void (*boot_done)(void* opaque);
+} AppleRTKitOps;
+
+struct AppleRTKitClass
+{
+    /*< private >*/
+    SysBusDeviceClass base_class;
+
+    /*< public >*/
+    ResettablePhases parent_phases;
+};
+
+#define RTKIT_EP_USER_START   (32)
+#define RTKIT_ROLLCALL_BLOCKS (256 / RTKIT_EP_USER_START)
+
+struct AppleRTKit
+{
+    /*< private >*/
+    AppleA7IOP parent_obj;
+
+    /*< public >*/
+    /* Set by subclasses or the owner in instance_init; `opaque` defaults to the RTKit itself. */
+    const AppleRTKitOps* ops;
+    QemuMutex            lock;
+    void*                opaque;
+    uint8_t              ep0_status;
+    uint32_t             protocol_version;
+    uint8_t              user_ep_start;
+    AppleRTKitEPTable_t  endpoints;
+    AppleA7IOPMessage    rollcall[RTKIT_ROLLCALL_BLOCKS];
+    uint8_t              rollcall_head;
+    uint8_t              rollcall_count;
+};
+
+// FIXME: Temporary; set by the machine from the kernel version. Should be read from the IOP firmware.
+extern uint16_t apple_rtkit_max_version;
+
+void apple_rtkit_send_control_msg(AppleRTKit* s, uint8_t ep, uint64_t data);
+void apple_rtkit_send_user_msg(AppleRTKit* s, uint8_t ep, uint64_t data);
+void apple_rtkit_register_control_ep(AppleRTKit* s, uint8_t ep, void* opaque, AppleRTKitEPHandler* handler);
+void apple_rtkit_register_user_ep(AppleRTKit* s, uint8_t ep, void* opaque, AppleRTKitEPHandler* handler);
+void apple_rtkit_unregister_control_ep(AppleRTKit* s, uint8_t ep);
+void apple_rtkit_unregister_user_ep(AppleRTKit* s, uint8_t ep);

@@ -1,0 +1,1187 @@
+//! Link symbols: resource slots, specialization keys, varyings, push fields.
+//!
+//! A `TypedModule` refers to every number that link assigns (descriptor set and binding,
+//! `Location`/`Component`, `SpecId`) through these typed symbols. The serializer records one
+//! relocation per [`Symbol`], and `relocate` writes only those literals. [`PushField`] is a
+//! placement key chosen per function in `select`, not a link symbol.
+
+use crate::vk;
+
+/// A Metal shader stage.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Stage {
+    Vertex,
+    Fragment,
+    Kernel,
+    /// An object function, a mesh render pipeline's first stage (`TaskEXT`).
+    Object,
+    /// A mesh function, a mesh render pipeline's geometry stage (`MeshEXT`).
+    Mesh,
+}
+
+impl Stage {
+    /// Whether the stage's threads run in workgroups: a kernel's, an object function's or a mesh
+    /// function's threadgroup, whose threads share its threadgroup memory and meet at its
+    /// barriers (`Workgroup` scope). A render stage's threadgroup memory is its tile's.
+    pub(crate) fn has_workgroup(self) -> bool {
+        matches!(self, Stage::Kernel | Stage::Object | Stage::Mesh)
+    }
+}
+
+/// A grid or threadgroup axis.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Axis {
+    X,
+    Y,
+    Z,
+}
+
+/// The Metal argument table a slot belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SlotClass {
+    /// `[[buffer(n)]]`, n < 31.
+    Buffer,
+    /// `[[texture(n)]]`, n < 128.
+    Texture,
+    /// `[[sampler(n)]]`, n < 16.
+    Sampler,
+}
+
+/// A Metal argument slot of one stage: the unit the binder binds and runtime facts name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SlotRef {
+    pub stage: Stage,
+    pub class: SlotClass,
+    pub index: u32,
+}
+
+/// Dimensionality of an image handle class.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ImageDim {
+    D1,
+    D2,
+    D3,
+    Cube,
+    Buffer,
+}
+
+/// Numeric type an image returns or accepts.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SampledType {
+    Float,
+    Sint,
+    Uint,
+    /// Metal's `ulong` texel: one unsigned 64-bit integer per texel, its low word in R and its high
+    /// word in G of an `RG32Uint` texture, the only format Metal binds to a `ulong` texture
+    /// parameter.
+    Uint64,
+}
+
+/// Whether an image is sampled or used as a storage image.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ImageAccess {
+    Sampled,
+    Storage,
+}
+
+/// The storage format class of an image handle class.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum StorageFormatClass {
+    /// A sampled image: no storage format.
+    NotStorage,
+    /// A storage image declared with format `Unknown` (formatless).
+    Unknown,
+    /// A storage image declared with this format.
+    Format(vk::Format),
+}
+
+/// The image part of a [`HandleClass`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ImageHandleClass {
+    pub dim: ImageDim,
+    pub arrayed: bool,
+    pub multisampled: bool,
+    pub sampled_type: SampledType,
+    pub depth_compare: bool,
+    pub access: ImageAccess,
+    pub format: StorageFormatClass,
+}
+
+/// One runtime array of the set-1 heap: a fixed enumeration of dimension × sampled type ×
+/// sampled/storage × storage format class, plus samplers by their use: an argument buffer's sampler
+/// made for a sample with comparison or without, of an integer texture or not, and sampling a cube
+/// with explicit gradients in the isotropic form or not (for which the sampler is made isotropic),
+/// as a combined binding's runtime sampler is made for its use (`CombinedSampler`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HandleClass {
+    Image(ImageHandleClass),
+    Sampler {
+        compare: bool,
+        integer: bool,
+    },
+    /// The visible-function tables an argument buffer can name: a read-only storage buffer of
+    /// one table's words (`pipeline::table`) per element.
+    FunctionTable,
+}
+
+impl HandleClass {
+    /// The sampler heap class of use `use_`.
+    pub fn sampler(use_: crate::metal::sampler::SamplerUse) -> HandleClass {
+        HandleClass::Sampler {
+            compare: use_.compare,
+            integer: use_.integer_texture,
+        }
+    }
+
+    /// The sampler use of a sampler class, `None` for an image class.
+    pub fn sampler_use(self) -> Option<crate::metal::sampler::SamplerUse> {
+        match self {
+            HandleClass::Sampler { compare, integer } => {
+                Some(crate::metal::sampler::SamplerUse::new(compare, integer))
+            }
+            HandleClass::Image(_) | HandleClass::FunctionTable => None,
+        }
+    }
+}
+
+/// A binding the translator adds that has no Metal slot.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SyntheticBinding {
+    /// Per-stage uniform buffer holding the push fields that did not fit the push window.
+    ArgumentTable,
+    /// The command buffer's `ExecutionStatus` buffer: the product's prepasses' status binding, and
+    /// a stage module's on a device that does not address buffers, a storage buffer the binder
+    /// writes as `WriteSource::ExecutionStatus`. A stage module of a device that addresses buffers
+    /// reaches the buffer by device address ([`PushField::ExecutionStatusAddress`]) instead.
+    ExecutionStatus,
+    /// The resident root table.
+    RootTable,
+    /// The handle table.
+    HandleTable,
+    /// The pipeline constant blob, a read-only storage buffer.
+    ConstantBlob,
+    /// The render encoder's tessellation factor buffer (`setTessellationFactorBuffer:offset:
+    /// instanceStride:`), a read-only storage buffer of a tessellation pipeline's synthesized
+    /// control stage, declared with the vertex stage's symbols.
+    TessellationFactors,
+    /// The render pass's imageblock storage: a coherent `R32Uint` 2D-array storage image whose
+    /// layer `w` holds word `w` of every pixel's imageblock cell, which a tile dispatch whose
+    /// function's explicit imageblock stands alone stages its tile's cells from and back.
+    Imageblock,
+    /// The sampler table: the handle table's layout over the argument buffers' samplers, whose
+    /// resource ids live apart from the textures' (the sampler half): 16-byte entries `{id low, id
+    /// high, element, word}` sorted by id after leading null entries, where `element` indexes the
+    /// set-1 sampler arrays and `word` is the sampler's
+    /// [`SamplerWord`](crate::metal::sampler::SamplerWord). A sampler handle the function loads is
+    /// the index of the entry its id finds (0 for an id the table lacks), and every use of it reads
+    /// that entry's element and word.
+    SamplerTable,
+    /// The function-table directory: the handle table's layout over the visible-function tables
+    /// the pipeline state made, whose resource ids live apart from textures' and samplers'.
+    FunctionTableDirectory,
+    /// A patch draw's patch index buffer (`DrawCall::Patches::patch_index`), a read-only storage
+    /// buffer of a tessellation pipeline's synthesized control stage, declared with the vertex
+    /// stage's symbols: the `uint` at a patch's position in the draw is its patch index.
+    PatchIndices,
+    /// An indexed patch draw's control-point index buffer (`DrawCall::IndexedPatches`), a
+    /// read-only storage buffer of the control stage of a pipeline with a control-point index
+    /// type, declared with the vertex stage's symbols: the index at `patch · N + k` is control
+    /// point `k`'s element.
+    ControlPointIndices,
+    /// The render pass's tile threadgroup memory: a storage buffer of words holding each tile's
+    /// `SpecKey::TileThreadgroupLength` bytes, tile `(x, y)` at tile index
+    /// `x + y · SpecKey::TileGridWidth`, which the pass keeps across its draws and tile
+    /// dispatches and starts at zero (`RuntimeFact::TileThreadgroupMemory`).
+    TileMemory,
+    /// The function-table snapshot: a read-only storage buffer of words the consumer writes per
+    /// command, holding a null table's record at word 0 and then each listed table's record, its
+    /// word count and its words. The stage's function-table directory gives each id the word
+    /// offset of its table's record.
+    FunctionTableSnapshot,
+}
+
+/// What kind of resource a [`ResourceSlot`] names.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ResourceKind {
+    Buffer,
+    Texture,
+    Sampler,
+    Heap(HandleClass),
+    Synthetic(SyntheticBinding),
+    /// A framebuffer-fetch input for this color index.
+    InputAttachment(u32),
+    /// A combined image sampler: the texture slot `ResourceSlot::index` of the stage, sampled
+    /// through `CombinedSampler::sampler`. One binding per (texture, sampler, use), so each carries
+    /// exactly the `VkSampler` its use needs.
+    CombinedTextureSampler(CombinedSampler),
+    /// A separate sampler that samples set-1 heap images: one binding per (sampler, use) of the
+    /// stage, so each carries exactly the `VkSampler` its use needs. A constexpr sampler is the
+    /// binding's immutable sampler. `ResourceSlot::index` is the use
+    /// ([`ResourceSlot::heap_sampler`]): the kind carries only the sampler, so `ResourceKind`
+    /// stays the size of its one `CombinedSampler` variant (a second one would widen every
+    /// `ResourceSlot`, and the `BuildError` that names one, on every builder frame).
+    HeapSampler(SamplerRef),
+    /// The acceleration structure bound at the stage's `[[buffer(n)]]` slot
+    /// `ResourceSlot::index`, which holds structures of this level.
+    AccelerationStructure(AccelerationStructureLevel),
+    /// A tile function's color attachment of this color index, as a storage image the
+    /// function's tile staging loads and stores.
+    TileAttachment(u32),
+    /// The tile map of the sparse texture bound at the stage's texture slot
+    /// `ResourceSlot::index` (`pipeline::tile_map`): a read-only storage buffer of words from
+    /// which a function answers the texture's residency where the device has no shader
+    /// residency (`RuntimeFact::SparseTexture { tile_map: true, .. }`).
+    TileMap,
+    /// The image half of a combined image sampler a stage takes apart: a texture slot of the stage
+    /// as a sampled image, sampled through the stage's [`ResourceKind::SeparateSampler`] of this
+    /// sampler and a use. One binding per (texture, sampler, use), as the combined binding it
+    /// stands for. `ResourceSlot::index` holds the use above the texture slot
+    /// ([`ResourceSlot::separate_texture`]): the kind carries only the sampler, as
+    /// [`ResourceKind::HeapSampler`]'s does, so `ResourceKind` keeps one `CombinedSampler` variant.
+    SeparateTexture(SamplerRef),
+    /// The sampler half of the combined image samplers a stage takes apart: one binding per
+    /// (sampler, use) of the stage, so each carries exactly the `VkSampler` its use needs. A
+    /// constexpr sampler is the binding's immutable sampler. `ResourceSlot::index` is the use
+    /// ([`ResourceSlot::separate_sampler`]), as a heap sampler's is.
+    SeparateSampler(SamplerRef),
+    /// The planes of the two-plane YCbCr texture bound at the stage's texture slot
+    /// `ResourceSlot::index`, held as an image of the multi-planar format that the device's own
+    /// sampler Y′CbCr conversion samples: a combined image sampler whose immutable sampler is the
+    /// device's conversion of this (`vk::SamplerDesc::ycbcr`), whose image the consumer views
+    /// with the same conversion.
+    YCbCrPlanes(crate::bind::YCbCrPlanesSampler),
+    /// The constexpr samplers one heap sampling chooses among by its sampler handle: an array of
+    /// one immutable sampler per candidate, each made for this use (with comparison or without,
+    /// of an integer texture or not), indexed by the handle's distance from the first
+    /// candidate's. `ResourceSlot::index` numbers the stage's arrays; the stage's interface lists
+    /// each one's samplers in element order (`StageInterface::sampler_arrays`), which link bakes
+    /// into the layout.
+    SamplerArray {
+        compare: bool,
+        integer: bool,
+    },
+}
+
+/// What a bound acceleration structure holds: the binder binds a top-level structure, so a
+/// primitive structure is bound through a one-instance top-level structure over it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum AccelerationStructureLevel {
+    /// `primitive_acceleration_structure`: geometry.
+    Primitive,
+    /// `instance_acceleration_structure`: instances of acceleration structures, primitive ones
+    /// or, under a multi-level intersector, instance ones. A Vulkan top-level structure holds one
+    /// level of instances, so the binder builds instances of primitive structures only.
+    Instance,
+}
+
+/// The sampler half of a combined image sampler.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SamplerRef {
+    /// The runtime sampler bound at `[[sampler(n)]]` of the same stage.
+    Slot(u32),
+    /// A constexpr sampler, by its canonical AIR state words (`air::abi::SamplerState`, bit 63 of
+    /// the first word clear): link bakes it into the layout as an immutable sampler.
+    Constexpr([u64; 2]),
+}
+
+impl SamplerRef {
+    /// A constexpr sampler's address modes on its `s`, `t` and `r` coordinates, as Metal names
+    /// them (`MTLSamplerAddressMode`; `address::clamp_to_zero` is `ClampToZero`, a border color's
+    /// `ClampToBorderColor`). `None` for a runtime sampler's slot, whose modes its bound state
+    /// holds, and for words that state no sampler.
+    pub fn constexpr_address_modes(self) -> Option<[crate::metal::SamplerAddressMode; 3]> {
+        match self {
+            SamplerRef::Constexpr(words) => crate::lower::sampler::address_modes(words),
+            SamplerRef::Slot(_) => None,
+        }
+    }
+}
+
+/// How a combined image sampler samples: its sampler, and the use facts that change or check the
+/// `VkSampler` (`metal::sampler::SamplerUse`): depth comparison, which is static in AIR, whether
+/// the texture is an integer one (integer border colors), whether it samples a cube with explicit
+/// gradients (no anisotropy), and whether it reads a pixel sampler's texel coordinates through the
+/// device's unnormalized sampler.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CombinedSampler {
+    pub sampler: SamplerRef,
+    /// The shader hands the binding a pixel sampler's coordinate in texels: its `VkSampler` is
+    /// the device's unnormalized one (`SamplerUse::unnormalized`), and its image a view of the
+    /// texture's first level alone.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unnormalized: bool,
+    /// The shader samples with depth comparison through this binding.
+    pub compare: bool,
+    /// The texture's sampled type is an integer type.
+    pub integer: bool,
+}
+
+impl CombinedSampler {
+    /// Sampler `sampler` used with `compare` on a texture that is `integer` or not, in normalized
+    /// coordinates.
+    pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler {
+        CombinedSampler {
+            sampler,
+            compare,
+            integer,
+            unnormalized: false,
+        }
+    }
+
+    /// This use, reading texel coordinates where `unnormalized` holds
+    /// ([`CombinedSampler::unnormalized`]).
+    pub fn with_unnormalized(self, unnormalized: bool) -> CombinedSampler {
+        CombinedSampler {
+            unnormalized,
+            ..self
+        }
+    }
+
+    /// The use as a heap sampler symbol's index, or a separate sampler's: bit 0 comparison, bit 1
+    /// an integer texel, bit 2 texel coordinates.
+    pub fn heap_index(&self) -> u32 {
+        u32::from(self.compare)
+            | (u32::from(self.integer) << 1)
+            | (u32::from(self.unnormalized) << 2)
+    }
+
+    /// Sampler `sampler` with the use a heap or separate sampler symbol's index `index` states
+    /// ([`CombinedSampler::heap_index`]).
+    pub fn from_heap_index(sampler: SamplerRef, index: u32) -> CombinedSampler {
+        CombinedSampler::new(sampler, index & 1 != 0, index & 2 != 0)
+            .with_unnormalized(index & 4 != 0)
+    }
+
+    /// The use's rank in a separate texture symbol's index: texel coordinates, comparison, then
+    /// an integer texel, from the most significant bit down, so the ranks order as the uses'
+    /// fields do in `CombinedSampler`'s derived order.
+    fn use_rank(&self) -> u32 {
+        (u32::from(self.unnormalized) << 2)
+            | (u32::from(self.compare) << 1)
+            | u32::from(self.integer)
+    }
+
+    /// Sampler `sampler` with the use of rank `rank` ([`CombinedSampler::use_rank`]).
+    fn from_use_rank(sampler: SamplerRef, rank: u32) -> CombinedSampler {
+        CombinedSampler::new(sampler, rank & 2 != 0, rank & 1 != 0).with_unnormalized(rank & 4 != 0)
+    }
+
+    /// The use the binder (and link, for a constexpr sampler) builds the `VkSampler` for.
+    pub fn sampler_use(&self) -> crate::metal::sampler::SamplerUse {
+        crate::metal::sampler::SamplerUse::new(self.compare, self.integer)
+            .with_unnormalized(self.unnormalized)
+    }
+
+    /// The device's sampler of a constexpr sampler in this use: the immutable sampler link bakes
+    /// into the binding's layout, and under the identity domains the sampler the consumer makes
+    /// for `PushField::ConstexprSampler`. Metal compiles a constexpr sampler into the function;
+    /// this is the `MTLSamplerDescriptor` of the same state through `metal::sampler::vk_sampler`,
+    /// with the sampler's own LOD bias as its `mipLodBias`. `None` for a runtime sampler's slot.
+    /// It refuses only what translation for the same profile refused first.
+    pub fn constexpr_sampler(
+        &self,
+        profile: &crate::device::DeviceProfile,
+    ) -> Result<Option<vk::SamplerDesc>, crate::error::Error> {
+        match self.sampler {
+            SamplerRef::Constexpr(words) => {
+                crate::lower::sampler::constexpr_desc(words, self.sampler_use(), profile).map(Some)
+            }
+            SamplerRef::Slot(_) => Ok(None),
+        }
+    }
+}
+
+/// The low bits of a separate texture symbol's index that hold its texture slot; the use's rank is
+/// above them ([`ResourceSlot::separate_texture`]).
+pub(crate) const SEPARATE_TEXTURE_SLOT_BITS: u32 = 28;
+
+/// A descriptor binding symbol: link assigns its set and binding number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ResourceSlot {
+    pub stage: Stage,
+    pub kind: ResourceKind,
+    pub index: u32,
+}
+
+impl ResourceSlot {
+    /// The binding symbol of heap sampler `c` of `stage`: the sampler in the kind, its use in the
+    /// index ([`CombinedSampler::heap_index`]).
+    pub fn heap_sampler(stage: Stage, c: CombinedSampler) -> ResourceSlot {
+        ResourceSlot {
+            stage,
+            kind: ResourceKind::HeapSampler(c.sampler),
+            index: c.heap_index(),
+        }
+    }
+
+    /// The heap sampler a `HeapSampler` binding symbol names ([`ResourceSlot::heap_sampler`]).
+    pub fn heap_sampler_use(&self) -> Option<CombinedSampler> {
+        match self.kind {
+            ResourceKind::HeapSampler(sampler) => {
+                Some(CombinedSampler::from_heap_index(sampler, self.index))
+            }
+            _ => None,
+        }
+    }
+
+    /// The binding symbol of separate sampler `c` of `stage`: the sampler in the kind, its use in
+    /// the index ([`CombinedSampler::heap_index`]).
+    pub fn separate_sampler(stage: Stage, c: CombinedSampler) -> ResourceSlot {
+        ResourceSlot {
+            stage,
+            kind: ResourceKind::SeparateSampler(c.sampler),
+            index: c.heap_index(),
+        }
+    }
+
+    /// The separate sampler a `SeparateSampler` binding symbol names
+    /// ([`ResourceSlot::separate_sampler`]).
+    pub fn separate_sampler_use(&self) -> Option<CombinedSampler> {
+        match self.kind {
+            ResourceKind::SeparateSampler(sampler) => {
+                Some(CombinedSampler::from_heap_index(sampler, self.index))
+            }
+            _ => None,
+        }
+    }
+
+    /// The binding symbol of the separate texture of `stage` at texture slot `texture`, sampled
+    /// through `c`: the sampler in the kind, and in the index the use's rank above the slot's 28
+    /// bits. Its symbols order by sampler, use, and slot, as the `CombinedTextureSampler` symbols
+    /// they stand for do, so link numbers their bindings in the same order. `None` for a slot the
+    /// bits cannot hold: canonicalization refuses any texture slot past Metal's 128 entries
+    /// (`AbiError::SlotPastTable`), so lowering never asks for one.
+    pub fn separate_texture(
+        stage: Stage,
+        texture: u32,
+        c: CombinedSampler,
+    ) -> Option<ResourceSlot> {
+        (texture >> SEPARATE_TEXTURE_SLOT_BITS == 0).then(|| ResourceSlot {
+            stage,
+            kind: ResourceKind::SeparateTexture(c.sampler),
+            index: (c.use_rank() << SEPARATE_TEXTURE_SLOT_BITS) | texture,
+        })
+    }
+
+    /// The texture slot and the sampler and use of a `SeparateTexture` binding symbol
+    /// ([`ResourceSlot::separate_texture`]).
+    pub fn separate_texture_of(&self) -> Option<(u32, CombinedSampler)> {
+        match self.kind {
+            ResourceKind::SeparateTexture(sampler) => {
+                Some(ResourceSlot::separate_texture_parts(sampler, self.index))
+            }
+            _ => None,
+        }
+    }
+
+    /// The texture slot, and `sampler` with its use, that a `SeparateTexture(sampler)` symbol's
+    /// index `index` states ([`ResourceSlot::separate_texture`]).
+    pub(crate) fn separate_texture_parts(
+        sampler: SamplerRef,
+        index: u32,
+    ) -> (u32, CombinedSampler) {
+        (
+            index & ((1 << SEPARATE_TEXTURE_SLOT_BITS) - 1),
+            CombinedSampler::from_use_rank(sampler, index >> SEPARATE_TEXTURE_SLOT_BITS),
+        )
+    }
+
+    /// The binding symbol of a Metal argument slot.
+    pub fn metal(slot: SlotRef) -> ResourceSlot {
+        let kind = match slot.class {
+            SlotClass::Buffer => ResourceKind::Buffer,
+            SlotClass::Texture => ResourceKind::Texture,
+            SlotClass::Sampler => ResourceKind::Sampler,
+        };
+        ResourceSlot {
+            stage: slot.stage,
+            kind,
+            index: slot.index,
+        }
+    }
+}
+
+/// The AIR user key of a stage-interface element (`air.arg_name` / `user(...)` ABI metadata).
+///
+/// Metal links vertex outputs to fragment inputs by this key; it is ABI data, compared only for
+/// equality and ordering, never interpreted.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AirUserKey(pub Box<[u8]>);
+
+/// A varying symbol: link assigns its `Location` and `Component`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct VaryingKey(pub AirUserKey);
+
+/// A specialization-constant symbol: link assigns its `SpecId`.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SpecKey {
+    /// Metal threads per threadgroup on one axis (`sx`, `sy`, `sz`).
+    LocalSize(Axis),
+    /// `sn = sx·sy·sz`, the flattened Vulkan workgroup width.
+    FlatLocalSize,
+    /// Boolean: the dispatch takes grid and region base from push fields.
+    MultiRegion,
+    /// Length of threadgroup-memory argument `i` (`setThreadgroupMemoryLength`).
+    TgLength(u32),
+    /// Whether the slot is bound (only for slots whose null-ness the shader observes).
+    Presence(SlotRef),
+    /// Rasterization sample count.
+    SampleCount,
+    /// The render encoder's vertex amplification count (`setVertexAmplificationCount:`, default
+    /// 1): Metal's `[[amplification_count]]`. A Vulkan pipeline is created per view mask, so the
+    /// count is fixed with it.
+    AmplificationCount,
+    /// The compute encoder's imageblock width (`setImageblockWidth:height:`, default 0); in a
+    /// fragment function that reaches its tile's threadgroup memory, the render pass's tile
+    /// width.
+    ImageblockWidth,
+    /// The compute encoder's imageblock height (`setImageblockWidth:height:`, default 0); in a
+    /// fragment function that reaches its tile's threadgroup memory, the render pass's tile
+    /// height.
+    ImageblockHeight,
+    /// The width of the render area a tile dispatch covers (`renderTargetWidth`, default 0).
+    RenderAreaWidth,
+    /// The height of the render area a tile dispatch covers (`renderTargetHeight`, default 0).
+    RenderAreaHeight,
+    /// Boolean: an out-of-bounds read of the texture bound to the slot reads alpha 1, because its
+    /// pixel format has no alpha component (or is a depth or stencil format, whose missing
+    /// components Metal leaves undefined), rather than 0 (default false). Metal reads a zero
+    /// texel out of bounds, with the format's missing components at their defaults
+    /// (`RuntimeFact::OutOfBoundsAlpha`).
+    OutOfBoundsAlpha(SlotRef),
+    /// How Metal's bicubic filter treats the texels of the format bound at the texture slot
+    /// (`u32`, the bits of `metal::bicubic::BicubicTexels`).
+    BicubicTexels(SlotRef),
+    /// Boolean: the texture bound to the slot is sparse (`MTLTexture.isSparse`, default false),
+    /// so its accesses that observe residency take the sparse form (`RuntimeFact::SparseTexture`).
+    SparseTexture(SlotRef),
+    /// The state of the runtime sampler bound to the slot (`u32`, default 0): its
+    /// [`SamplerWord`](crate::metal::sampler::SamplerWord) masked by `fields`, the word's bits
+    /// the function reads, so samplers that differ only in other fields share a pipeline. A slot
+    /// bound to no sampler takes 0.
+    SamplerState { slot: SlotRef, fields: u32 },
+    /// The byte offset of a tile or fragment function's threadgroup argument `i` in its tile's
+    /// threadgroup memory (`setThreadgroupMemoryLength:offset:atIndex:`, default 0).
+    TgOffset(u32),
+    /// The bytes of each tile's threadgroup memory: the render pass's `threadgroupMemoryLength`
+    /// rounded up to 16 (default 0).
+    TileThreadgroupLength,
+    /// The tiles across the render pass's render area, `ceil(width / tile width)` (default 0):
+    /// the stride of a tile row in `SyntheticBinding::TileMemory`.
+    TileGridWidth,
+    /// The swizzle of the texture buffer bound to the slot (`u32`, default the identity's word):
+    /// its `MTLTextureSwizzleChannels`, each channel's `MTLTextureSwizzle` raw value in three
+    /// bits, red's lowest, which the function applies to its reads (`RuntimeFact::TextureSwizzle`);
+    /// at a storage slot of `LoweringInputs::swizzled_storage`, the bound texture's swizzle, which
+    /// the function applies to its reads and undoes on its writes, and at an extended-range sampled
+    /// slot of it, which the function applies to the decoded texels it reads, samples and gathers,
+    /// and at a packed normalized sampled slot of it, to the texels its class converts.
+    TextureSwizzle(SlotRef),
+    /// An object function's threads per threadgroup on one axis (`threadsPerObjectThreadgroup`):
+    /// its `LocalSize`, a key of its own so that a mesh render pipeline's object and mesh
+    /// threadgroups take separate sizes.
+    ObjectLocalSize(Axis),
+    /// An object function's `FlatLocalSize`.
+    ObjectFlatLocalSize,
+    /// An object function's `MultiRegion`.
+    ObjectMultiRegion,
+    /// The level, in sixty-fourths of a level, that Metal's `calculate_clamped_lod` answers
+    /// outside a fragment function through the runtime sampler bound to the slot, before the
+    /// texture's last level bounds it (`u32`, default 0): `metal::sampler::query_min_level` of
+    /// its descriptor (0 without a mip filter, else its `lodMinClamp` on Metal's grid). A slot
+    /// bound to no sampler takes 0.
+    SamplerMinLevel(SlotRef),
+    /// The lanes an access of the sparse texture bound to the slot reads as constants
+    /// (`u32`, default 0; `RuntimeFact::ConstantLanes`): bit `lane` (0 red to 3 alpha) where the
+    /// lane's source through the texture's swizzle (`MTLTexture.swizzle`) is a channel its pixel
+    /// format (`MTLTexture.pixelFormat`) lacks or a `Zero` or `One` swizzle, bit `4 + lane` where
+    /// that constant is 1. A slot bound to a texture that is not sparse (`MTLTexture.isSparse`),
+    /// or to none, takes 0.
+    ConstantLanes(SlotRef),
+    /// The class of the format of the texture bound to the slot (`u32`, as `TexelFormat` states
+    /// it: `metal::texel_format::texel_format`), read by a specialized note's test alone
+    /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
+    /// pipeline's key carries it, so the bound format decides the note without a `VkPipeline` of
+    /// its own. The runtime reads it from the texture a draw or dispatch binds
+    /// (`StageModule::precision_notes_bound`'s `bound`); where the format is not known, such a
+    /// test holds.
+    BoundTexelFormat(SlotRef),
+    /// The plane axes of the texture bound to the slot on which the base-level size Metal's
+    /// texel-offset rule reads is not a power of two where the texture's own base level's is
+    /// (`u32`, default 0): bit `a` (0 width, 1 height, 2 depth) for a view whose first level lies
+    /// above its parent's base level (`MTLTexture.parentRelativeLevel`) where its parent's
+    /// base-level size on that axis is not a power of two and its own is. Metal drops a texel
+    /// offset on a repeating or mirrored axis whose level size lies in `[2, 7]` and whose base
+    /// size, the parent's, is not a power of two. A slot bound to any other texture, or to none,
+    /// takes 0.
+    OffsetBaseAxes(SlotRef),
+    /// The degree the runtime sampler bound to the slot filters with (`u32`, default 0): `log2`
+    /// of its `maxAnisotropy` as Metal samples it (rounded up to a power of two; 32 for 17 to 31),
+    /// which an emulated anisotropic sample reads. A slot bound to an isotropic sampler, or to
+    /// none, takes 0.
+    SamplerAnisotropy(SlotRef),
+    /// Boolean: the runtime sampler bound to the slot is a nearest pixel sampler of one level
+    /// (default false): it reads pixel coordinates (`normalizedCoordinates` false) through nearest
+    /// minification and magnification filters, without a mip filter and isotropically (its word
+    /// masked by `SamplerWord::nearest_pixel(false)` is `SamplerWord::PIXEL_COORDINATES`). Where it
+    /// holds, a pixel sample through the slot hands the device its texel's centre, from which the
+    /// device's sampler reads exactly the texel Metal's reads. A slot bound to a normalized sampler,
+    /// or to none, takes false, so a normalized sampler's filter makes no pipeline of its own.
+    NearestPixelSampler(SlotRef),
+    /// The word of the runtime sampler bound to the slot (`u32`: its whole
+    /// [`SamplerWord`](crate::metal::sampler::SamplerWord), its address modes as the bound
+    /// texture's map sends them), read by a specialized note's test alone
+    /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
+    /// pipeline's key carries it, so the bound sampler decides the note without a `VkPipeline` of
+    /// its own. The consumer gives it, and the runtime reads such a
+    /// test at each draw or dispatch (`StageModule::precision_notes_bound`); where the sampler is
+    /// not known, such a test
+    /// holds. A slot bound to no sampler takes 0.
+    BoundSamplerWord(SlotRef),
+    /// Two bits: 1 where a texture the stage's handles can name is one a heap holds by its raw
+    /// texels alone (`lower::texture::heap_raw_form`: an unswizzled, not sparse texture of one sample
+    /// of a form of `ExtendedRange::HEAP_READ`, whose texels the function's `float` read, sample or
+    /// gather decodes by the device's arithmetic, `PrecisionNote::DevicePackConversion`), and 2
+    /// where one such is of a form whose linear sample the function filters by the device's
+    /// arithmetic (not a bfloat form, whose sample reads the nearest texel under either filter,
+    /// `PrecisionNote::BicubicFilterArithmetic`): of the heap members of the command reaching the
+    /// stage, a member it makes resident (`useResource:`) or binds at a texture slot of the
+    /// stage, given by the consumer. A
+    /// texture the command neither names nor makes resident, which a handle loaded from memory may
+    /// still reach and whose read Metal leaves undefined, is not counted. A stage whose `float`
+    /// read, sample, gather or query of a heap may meet such a texture declares it as a constant
+    /// (default 3), whose bit 1 gates the raw arms (`lower::texture::heap_raw_form`): where it is 0
+    /// they are dead code at pipeline creation, exactly, since no handle the command names then
+    /// carries a raw form's class. A pipeline's key carries it there, and a specialized note's test
+    /// reads it from the key; elsewhere such a test reads the plan's value, and where it is not
+    /// known such a test holds.
+    HeapRawTextures(Stage),
+    /// Four bits: the families of the float textures the stage's handles can name whose texel may
+    /// hold a NaN a `half` write stores (`lower::texture::half_write_nans`), each a bit of
+    /// `bind::heap::nan_family`: 1 a 16-bit float format, 2 a 32-bit float one, 4 a packed
+    /// small float one (`RG11B10Float`, `RGB9E5Float`), 8 a float format of none of those and
+    /// none whose texels hold no NaN (normalized, sRGB, extended-range); of the heap members of
+    /// the command reaching the stage, as for [`HeapRawTextures`](Self::HeapRawTextures), and
+    /// read by a specialized note's test alone ([`SpecTest`](crate::pipeline::SpecTest)), given
+    /// by a plan, as [`BoundSamplerWord`](Self::BoundSamplerWord) is.
+    HeapNanFamilies(Stage),
+    /// Boolean: an element that a kernel's `[[stage_in]]` fetch of a thread-position step reads
+    /// in this dispatch region may lie past the first `2^32` bytes from its bind offset (default
+    /// true). Each such element is the region's origin plus the thread's position over the step
+    /// rate, clamped to the region's last element. Where an element lies there, the fetch's reach
+    /// check reads it as zero (`lower::stage_io::fetch`). The binder sets the key to false only
+    /// where every element of the region (or of the grid, in a region of size 0 on the axis)
+    /// fits, at the layout's stride and the end of its attributes' bytes. A false key drops the
+    /// check; it answers the same everywhere it holds. An indexed step's element is whatever its
+    /// index buffer holds, which bounds nothing, so an indexed step runs its check whatever the
+    /// key says.
+    StageInReach,
+    /// Metal's border texels of the texture bound to the slot (`u32`, default a four-channel
+    /// format's without a swizzle): bit `3c + b` is set where channel `c` (0 red to 3 alpha) of the
+    /// texel a read through a sampler hands back at an index outside the level on a border axis
+    /// reads 1 for border color `b` (`MTLSamplerBorderColor`'s value), the format's channels and
+    /// the texture's swizzle deciding it (`metal::sampler::border_texels`,
+    /// `RuntimeFact::BorderTexels`).
+    BorderTexels(SlotRef),
+    /// Boolean: the kernel's threadgroup runs as one row (default false). Its workgroup is then
+    /// `(sx·sy·sz, 1, 1)` (its [`WorkgroupSize`](SpecKey::WorkgroupSize) constants), and its
+    /// position in the threadgroup is its `LocalInvocationIndex`
+    /// unflattened over `(sx, sy, sz)`, `x` fastest, which is Metal's order, so its linear index
+    /// and every other builtin keep their values. Declared on `Device::from_queries`' profile by
+    /// a kernel whose workgroup is its threadgroup (`LocalSizeForm::Spec`), so a threadgroup
+    /// deeper than [`DEEP_THREADGROUP`](crate::pipeline::DEEP_THREADGROUP) runs within every
+    /// device's `maxComputeWorkGroupSize`; where it is false the workgroup is `(sx, sy, sz)` and
+    /// the pipeline is the one the kernel makes without it.
+    DeepThreadgroup,
+    /// A kernel's Vulkan workgroup size on one axis, where it declares
+    /// [`DeepThreadgroup`](SpecKey::DeepThreadgroup) (default the axis's `LocalSize` default):
+    /// the threadgroup's own size, or `(sx·sy·sz, 1, 1)` where `DeepThreadgroup` is true, as
+    /// [`threadgroup_constants`](crate::pipeline::threadgroup_constants) answers for the
+    /// threadgroup with its other keys. Each
+    /// part of the module's `WorkgroupSize` is such a plain constant, never an
+    /// `OpSpecConstantOp`: the size a driver reads from the composite's parts as declared is the
+    /// one the body computes with.
+    WorkgroupSize(Axis),
+}
+
+impl SpecKey {
+    /// The keys of a `stage` function's threadgroup size and grid form: its `LocalSize` on each
+    /// axis, its `FlatLocalSize` and its `MultiRegion`. An object function has keys of its own;
+    /// every other stage that runs in threadgroups takes the kernel's.
+    pub(crate) fn dispatch_keys(stage: Stage) -> DispatchKeys {
+        match stage {
+            Stage::Object => DispatchKeys {
+                local: [Axis::X, Axis::Y, Axis::Z].map(SpecKey::ObjectLocalSize),
+                flat: SpecKey::ObjectFlatLocalSize,
+                multi_region: SpecKey::ObjectMultiRegion,
+            },
+            _ => DispatchKeys {
+                local: [Axis::X, Axis::Y, Axis::Z].map(SpecKey::LocalSize),
+                flat: SpecKey::FlatLocalSize,
+                multi_region: SpecKey::MultiRegion,
+            },
+        }
+    }
+}
+
+/// The specialization keys of one stage's threadgroup size and grid form
+/// ([`SpecKey::dispatch_keys`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DispatchKeys {
+    /// `sx`, `sy`, `sz`.
+    pub local: [SpecKey; 3],
+    /// `sn = sx·sy·sz`.
+    pub flat: SpecKey,
+    /// Whether the dispatch takes its grid and region base from push fields.
+    pub multi_region: SpecKey,
+}
+
+/// A push-constant field kind, in the fixed placement order (the derived `Ord`).
+///
+/// `select` places a function's fields in this order into the stage's push window and spills the
+/// rest to the stage's `ArgumentTable`.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PushField {
+    /// Device address (`u64`) of the stage's parameter block under the identity domains: the
+    /// fields placed past the push window (`PushLoc::ArgumentTable`), at their placed offsets, in
+    /// memory the consumer writes for the call (16-byte aligned, `argument_table_size` bytes).
+    /// It sorts first, so the window always holds it.
+    ArgumentTableAddress,
+    /// Device address of the resident root table.
+    RootTableAddress,
+    /// Device address of the `ExecutionStatus` buffer: a function that counts resident-set misses
+    /// has dynamic roots, so it reaches memory by device address already.
+    ExecutionStatusAddress,
+    /// Device address (`u64`) of the first index a de-indexed draw reads
+    /// (`LoweringInputs::primitive_id_indices`): the index buffer's address plus the draw's index
+    /// buffer offset, a multiple of the index size; or of a private list form draw's list
+    /// (`LoweringInputs::private_list`). A vertex function compiled in either form reads its
+    /// stream position's raw index there: a hole the consumer fills
+    /// (`PushHole::CaptureIndexAddress`), placed with the other addresses so the vertex window
+    /// always holds it.
+    CaptureIndexAddress,
+    /// Device address (`u64`) of a merged draw replay's header (`bind::replay`'s `merged.rs`),
+    /// which a vertex function compiled under `LoweringInputs::merged_draws` reads its corner's
+    /// command, vertex and instance from, and its command's slot table, in place of
+    /// `RootTableAddress`: a hole the consumer fills (`PushHole::MergedDrawAddress`), placed with
+    /// the other addresses. The merge passes read the header there too.
+    MergedDrawAddress,
+    /// Device address (`u64`) of the execution range (Metal's
+    /// `MTLIndirectCommandBufferExecutionRange`, a `u32` location then a `u32` length) a vertex
+    /// function compiled under `LoweringInputs::indirect_range` reads in its first block: an
+    /// invocation of a command outside it ([`PushField::IndirectSequence`]) returns before the
+    /// body, its `[[position]]` outside every clip volume, so the command draws nothing. The
+    /// binder points it at the range an execution reads from a buffer, and at a range of every
+    /// command (location 0, length `u32::MAX`) for a direct draw or an execution over a range
+    /// the CPU gives. Placed with the other addresses.
+    IndirectRange,
+    /// The command (`u32`) of an indirect command buffer's execution that the draw is, less its
+    /// part's first ([`PushField::IndirectBase`]), which a vertex function compiled under
+    /// `LoweringInputs::indirect_range` adds to it and tests against its
+    /// [`PushField::IndirectRange`]: the sequence index an execution's `SEQUENCE_INDEX` token
+    /// pushes there, 0 for a direct draw. Placed beside the addresses, so the vertex window always
+    /// holds it.
+    IndirectSequence,
+    /// The first command (`u32`) of the part of an indirect command buffer's execution that the
+    /// draw is: a consumer may run an execution's commands as several parts, each counting its
+    /// sequences ([`PushField::IndirectSequence`]) from 0, and pushes each part's first here. 0
+    /// for a direct draw. Placed beside the addresses, so the vertex window always holds it.
+    IndirectBase,
+    // The three amplification words come right after the addresses in the order, so every stage
+    // window holds them (at most 32 bytes before them, 12 of them): a draw of one amplification
+    // writes them alone, between its draws, never through an `ArgumentTable`.
+    /// The amplification (`u32`) a draw of one amplification draws, which a function compiled
+    /// under `LoweringInputs::amplification_draws` reads as its `[[amplification_id]]`.
+    AmplificationId,
+    /// That amplification's `renderTargetArrayIndexOffset` (`u32`, its view mapping's; 0 for
+    /// `nil` mappings): under `LoweringInputs::amplification_draws` a vertex function adds it to
+    /// the render target slice index it writes (0 where it writes none), and a fragment
+    /// function whose vertex function writes none reads it as its `[[render_target_array_index]]`.
+    AmplificationLayerOffset,
+    /// That amplification's `viewportArrayIndexOffset` (`u32`), added to the viewport index and
+    /// read as `AmplificationLayerOffset` is.
+    AmplificationViewportOffset,
+    /// Region base and grid of a multi-region dispatch (`lower::dispatch`'s module docs). Under
+    /// the identity domains every dispatch the host knows is a region: its first threadgroup in
+    /// Metal's grid (0 unless the consumer splits the dispatch), Metal's threadgroup size, and
+    /// Metal's `threads_per_grid`; an indirect dispatch states a zero grid, and its kernel takes
+    /// `NumWorkgroups` times its workgroup size.
+    DispatchRegion,
+    /// Device address (`u64`) of the region record a device-replay variant's dispatch reads its
+    /// `DispatchRegion` value from: the replay's preprocess writes one record per replayed command
+    /// and region, so a ragged or split command's regions take the base, nominal size, and grid of
+    /// the command. Only a replay variant (`LoweringInputs::replay_bindings`) that reads a grid
+    /// builtin declares it, in place of `DispatchRegion`, and in its place in the order: a
+    /// per-region field the push window always holds.
+    ReplayRegionAddress,
+    /// Base vertex and base instance without `shaderDrawParameters`.
+    BaseVertexInstance,
+    /// The draw's vertices per primitive `n`, a `u32`: 3 for a triangle list, 2 for a line list,
+    /// 1 for a strip or points. A vertex function compiled under
+    /// `LoweringInputs::primitive_id_varying` writes `(VertexIndex - first) / n` to the primitive
+    /// ID's varying (`IoRole::PrimitiveId`), `first` the draw's base vertex (Vulkan's `BaseVertex`
+    /// with `shaderDrawParameters`, lane 0 of `BaseVertexInstance` without). The binder writes it
+    /// for each draw without indices, direct or indirect.
+    VerticesPerPrimitive,
+    /// Residual bind offset of a descriptor-form slot: the bind offset minus the descriptor base,
+    /// modulo 2^32.
+    SlotBindOffset(SlotRef),
+    /// Under the identity domains, the element of the set-1 sampled-texture array
+    /// through which a fragment function reads color attachment `color` (`[[color(n)]]`): one
+    /// `u32`, the index of an element holding a 2D view of the attachment's level and slice
+    /// (multisampled in a multisampled pipeline), which the function fetches as `texels` at the
+    /// integer part of its `FragCoord` (and its `SampleId`). No descriptor holds the attachment.
+    /// The function states `RuntimeFact::FramebufferFetch` for the color, and its fetches are
+    /// ordered after earlier draws only by the consumer's barriers, not after an overlapping
+    /// earlier fragment of the same draw (`PrecisionNote::UnorderedFetchWithinDraw`). Ordered
+    /// before the slot addresses, so on the floor a fragment function that
+    /// pushes no parameter block's address places it in the four bytes a vertex function's push
+    /// end may leave below the fragment function's first eight-byte field.
+    FetchedColor { color: u32, texels: SampledType },
+    /// Guest base address of a static-root slot. Under the identity domains, a `u64`: a buffer
+    /// slot's device address (its `gpuAddress` plus the bind offset) less 2^31, modulo 2^64
+    /// (`docs/API.md`, section 5), and a texture or sampler slot's `gpuResourceID`
+    /// (`docs/RESOURCE-ID.md`), 0 for nil.
+    SlotGuestBase(SlotRef),
+    /// Stride of a pulled vertex buffer layout.
+    VertexBufferStride(u32),
+    /// The compute encoder's stage-in region (`setStageInRegion:`): its origin `xyz` and its size
+    /// `xyz`, one `uvec4` each (`w` 0).
+    StageInRegion,
+    /// The tessellation factor buffer's residual bind offset (`u32`), as `SlotBindOffset`'s: a
+    /// field of a tessellation pipeline's synthesized control stage.
+    TessellationFactorOffset,
+    /// The tessellation factor buffer's `instanceStride` (`u32`), a control-stage field.
+    TessellationFactorInstanceStride,
+    /// The encoder's tessellation factor scale rounded to `half` (`float`), a control-stage field.
+    TessellationFactorScale,
+    /// The mipmap level count (`u32`) of the storage texture bound to the slot, 0 where the binder
+    /// binds a neutral (`RuntimeFact::StorageTextureLevels`). Under the identity domains no fact
+    /// is stated: 0 where the slot's resource ID is nil.
+    TextureLevels(SlotRef),
+    /// Under the identity domains, the first element (`u32`) of the run of set 1's storage-image
+    /// array that holds the levels of the storage texture bound to a slot read or written at a
+    /// level other than the constant 0, each its own single-level storage view, in order from the
+    /// texture's first level (`docs/RESOURCE-ID.md`): an access at level `l` reads or writes element
+    /// `first + min(l, max(n, 1) − 1)`, `n` the slot's [`PushField::TextureLevels`], and only
+    /// where `l < n`. A texture of one level pushes its resource ID's index, whose storage element
+    /// is that level, and nil pushes 0.
+    TextureLevelBase(SlotRef),
+    /// The instance count (`u32`) of the instance acceleration structure bound at the buffer slot,
+    /// 0 where none is bound (`RuntimeFact::AccelerationStructureInstanceCount`).
+    InstanceCount(SlotRef),
+    /// Device address (`u64`) of an indirect command buffer's record storage (its header), which
+    /// the device replay's preprocess module reads (`bind::replay`). No translated function
+    /// reads it.
+    CommandRecordsAddress,
+    /// The whole indices (`u64`) from an indexed indirect draw's bound index offset to its index
+    /// buffer's end, which the index-clamp prepass reads. No translated function reads it.
+    IndexCapacity,
+    /// The render encoder's viewport count (`u32`, `setViewports:count:`) for a vertex function
+    /// that writes `[[viewport_array_index]]` (`RuntimeFact::ViewportCount`): it stores
+    /// `ViewportIndex` as 0 for an index at or past it. 0 where the encoder never set its
+    /// viewports, which keeps every index 0, as Metal's one default viewport does.
+    ViewportCount,
+    /// The render pass's `renderTargetArrayLength` (`u32`) for a vertex function that writes
+    /// `[[render_target_array_index]]` and writes `Layer` (`RuntimeFact::RenderTargetArrayLength`
+    /// without `layer_dropped`): it stores `Layer` as 0
+    /// for an index at or past it, as Metal renders the pass's first layer there.
+    RenderTargetArrayLength,
+    /// The patch index buffer's residual bind offset (`u32`), as `SlotBindOffset`'s: a field of
+    /// a tessellation pipeline's synthesized control stage.
+    PatchIndexOffset,
+    /// Whether the patch draw binds a patch index buffer (`u32`, 1 or 0), a control-stage field.
+    PatchIndexBound,
+    /// The control-point index buffer's residual bind offset (`u32`), a control-stage field of a
+    /// pipeline with a control-point index type.
+    ControlPointIndexOffset,
+    /// The draw's band of a pipeline variant that draws its lines as bands
+    /// (`VariantKey::line_band`, `link::band`): one `vec4` of the synthesized evaluation stage's
+    /// own push range, `[sx, sy, h, 0]`, the half extent of the draw's Vulkan viewport 0 (its
+    /// height negative, as the runtime's viewports are) and half the band's width in pixels.
+    LineBand,
+    /// The stride (`u32`) the compute encoder binds the kernel buffer at this Metal index with
+    /// (`setBuffer:offset:attributeStride:atIndex:` and its forms, its low 32 bits,
+    /// `MTLAttributeStrideStatic`'s `2^32 - 1` included), 0 where it binds none, which a
+    /// `[[stage_in]]` layout of `MTLBufferLayoutStrideDynamic` fetches at
+    /// (`RuntimeFact::StageInStride`).
+    StageInStride(u32),
+    /// The draw's depth clamp range for a fragment function compiled under
+    /// `LoweringInputs::depth_clamp_range` (`RuntimeFact::DepthClampRange`): one `uvec2` holding
+    /// the bits of two `f32`s, `[low, high]`, which the function clamps the depth it writes to
+    /// after Metal's `[0, 1]`.
+    DepthClampRange,
+    /// The draw's layout for a vertex function compiled in the primitive ID's de-indexed form
+    /// (`LoweringInputs::primitive_id_indices`), a `uvec4`, of a draw run from vertex 0: 0, the
+    /// index count, the first instance, and the base vertex. Stream position `p = VertexIndex`
+    /// reads its raw index at `PushField::CaptureIndexAddress`, and its vertex is that index plus
+    /// the base vertex.
+    CaptureLayout,
+    /// The channel widths of the storage texture bound to the slot (`u32`;
+    /// `metal::format::integer_channels_word`, 0 where the binder binds a neutral): byte `c`
+    /// holds `32 - bits` of channel `c` (red to alpha) of an integer format narrower than 32 bits,
+    /// else 0, and an integer texel's write saturates each lane to that range in the image's
+    /// signedness, as Metal stores it (`RuntimeFact::StorageTextureIntegerChannels`, a slot whose
+    /// storage choice declares no format).
+    TextureIntegerChannels(SlotRef),
+    /// Under the identity domains, how Metal's bicubic filter treats the texels of the texture
+    /// bound to the slot (`u32`; `metal::format::bicubic_texels_word`, the bits the binder
+    /// specializes `SpecKey::BicubicTexels` to elsewhere, `metal::format::BICUBIC_TEXELS_UNBOUND`
+    /// where the slot is bound to nothing): a bicubic sample of the slot selects its filter, clamp
+    /// and border texels on it at run time, so one module serves every bound format.
+    BicubicTexels(SlotRef),
+    /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
+    /// function that computes a blend in the shader under a blend that reads it (an
+    /// extended-range attachment's, or a rotated one's): one `uvec4`
+    /// holding the four `f32`s' bits as the encoder set them.
+    HalfBlendColor,
+    /// The render encoder's alpha test reference (`setAlphaTestReferenceValue:`) for a fragment
+    /// function compiled under `LoweringInputs::alpha_test`: one `u32`, the reference's 8-bit
+    /// unorm code as Metal's alpha test compares it (`bind::alpha_test_code` of the reference),
+    /// which the function compares its color 0's alpha's code with.
+    AlphaTestReference,
+    /// Under the identity domains, the sampler a sample takes through a constexpr sampler
+    /// (`SamplerRef::Constexpr`), used as the field's [`CombinedSampler`] states: one `u32`, the
+    /// index (1 to 3,999, `docs/RESOURCE-ID.md`) of the element of the set-1 sampler array of the
+    /// use (plain, compare, or integer texture) that holds the device's sampler
+    /// [`CombinedSampler::constexpr_sampler`] describes, as a runtime sampler's resource ID names
+    /// its element. Metal compiles a constexpr sampler into the function; the consumer makes it
+    /// a device sampler of its own. The use's coordinates are normalized: the function scales a
+    /// pixel sampler's coordinates itself.
+    ConstexprSampler(CombinedSampler),
+    /// Under the identity domains, the device address of the factors a tessellation pipeline's
+    /// synthesized control stage reads (`u64`): the factor buffer's address plus the encoder's
+    /// offset (`setTessellationFactorBuffer:offset:instanceStride:`). No function places it: the
+    /// pipeline's interface states it in a vertex-stage placement of its own, at the
+    /// `TessellationState::push_offset`.
+    TessellationFactorAddress,
+    /// The device address (`u64`, a multiple of 16) of the runtime's memory that holds a kernel's
+    /// private arena past the floor (`RuntimeFact::PrivateArena`): one slot of the fact's
+    /// `slot_bytes` for each invocation of the dispatch, the invocation's slot its index in its
+    /// dispatch, `((wz · ny + wy) · nx + wx) · n + LocalInvocationIndex` with `(wx, wy, wz)` its
+    /// `WorkgroupId`, `(nx, ny, nz)` the dispatch's `NumWorkgroups` and `n` its workgroup's
+    /// invocations. The memory holds a slot for every invocation of the dispatch, and no other
+    /// dispatch that may run beside it reaches those slots. Nothing is zeroed: the arena's bytes
+    /// are undefined until the thread writes them, as Metal's private memory is.
+    PrivateArenaAddress,
+    // The check's fields come last in the order: what every access reads is placed ahead of what
+    // only a checked access reads, so where a function's fields spill into its parameter block
+    // they are the first to go.
+    /// Under the identity domains, the device address (`u64`) of 16 bytes of zeros, at a multiple
+    /// of 16, that nothing writes: a load of a buffer slot checked against its `SlotBounds`
+    /// reads each of its units there where the check fails, so it reads zero (`docs/API.md`,
+    /// section 5). Being a multiple of 16 it is never `u64::MAX`, the value a floor stage whose
+    /// tail it is tests for (`lower::push::tail_never_pushed`).
+    ZeroAddress,
+    /// Under the identity domains, a buffer slot's buffer (`uvec2`): the bytes of the buffer before
+    /// the slot's bind offset (the bind offset), then the buffer's length; for a `set*Bytes` copy 0
+    /// and its length, for nil 0 and 0. A load, store or atomic of the slot at a byte offset `m`
+    /// from the bind offset, read as signed, that is not a translation-time constant is checked
+    /// against the buffer, `(len >= n) && (m + before <= len - n)` in `u32`, as `m + before <
+    /// len - min(len, n - 1)` with the limit made once per slot and size: outside, a load reads
+    /// zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`, section 5). A
+    /// buffer is at most 2 GiB, so the length is never `u32::MAX`: a floor stage whose tail it is
+    /// tests whether both words are all ones (`lower::push::tail_never_pushed`), which the consumer
+    /// never pushes.
+    SlotBounds(SlotRef),
+    /// On `Device::from_queries`' profile, the zero word (`u32`) a stage
+    /// whose pushed fields include no tail kind (`lower::push::tail_kind`) pushes as its tail,
+    /// `lower::push::HOLE_BYTES` above them, and tests whether it is non-zero: the consumer pushes
+    /// it zero with the stage's other fields, so the test never holds. No placement lists it
+    /// among its fields: it is the push-block member at `PushPlacement::tail_word`.
+    TailWord,
+}
+
+/// A relocatable literal: which decoration operand the serializer reserved, and for what.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Symbol {
+    /// `OpDecorate Binding` literal.
+    Binding(ResourceSlot),
+    /// `OpDecorate DescriptorSet` literal.
+    DescriptorSet(ResourceSlot),
+    /// `OpDecorate Location` literal.
+    Location(VaryingKey),
+    /// `OpDecorate Component` literal.
+    Component(VaryingKey),
+    /// `OpDecorate SpecId` literal.
+    SpecId(SpecKey),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A heap sampler's symbol round-trips its use, and `ResourceKind` stays the size of its
+    /// `CombinedSampler` variant, so heap samplers widen no `ResourceSlot`.
+    #[test]
+    fn heap_sampler_symbols_round_trip_without_widening_the_kind() {
+        for words in [[0, 0], [u64::MAX >> 1, 7]] {
+            for compare in [false, true] {
+                for integer in [false, true] {
+                    let c = CombinedSampler::new(SamplerRef::Constexpr(words), compare, integer);
+                    let s = ResourceSlot::heap_sampler(Stage::Fragment, c);
+                    assert_eq!(s.heap_sampler_use(), Some(c));
+                }
+            }
+        }
+        assert_eq!(
+            ResourceSlot::metal(slot(SlotClass::Sampler, 0)).heap_sampler_use(),
+            None
+        );
+        assert_eq!(
+            std::mem::size_of::<ResourceKind>(),
+            std::mem::size_of::<CombinedSampler>()
+        );
+    }
+
+    /// A separate texture's symbol round-trips its texture slot, sampler, and use, and the symbols
+    /// order as the `CombinedTextureSampler` symbols they stand for (by sampler, use, and slot), so
+    /// link numbers the bindings of both forms alike. A slot past the index's 28 bits has no
+    /// symbol; canonicalization refuses every slot past Metal's 128 entries first.
+    #[test]
+    fn separate_texture_symbols_round_trip_in_the_combined_order() {
+        let mut pairs = Vec::new();
+        for sampler in [
+            SamplerRef::Slot(0),
+            SamplerRef::Slot(15),
+            SamplerRef::Constexpr([0, 0]),
+            SamplerRef::Constexpr([u64::MAX >> 1, 7]),
+        ] {
+            for compare in [false, true] {
+                for integer in [false, true] {
+                    let c = CombinedSampler::new(sampler, compare, integer);
+                    assert_eq!(
+                        ResourceSlot::separate_sampler(Stage::Fragment, c).separate_sampler_use(),
+                        Some(c)
+                    );
+                    for texture in [0, 1, 127, (1 << 28) - 1] {
+                        let s = ResourceSlot::separate_texture(Stage::Fragment, texture, c)
+                            .expect("a slot the index holds");
+                        assert_eq!(s.separate_texture_of(), Some((texture, c)));
+                        let combined = ResourceSlot {
+                            stage: Stage::Fragment,
+                            kind: ResourceKind::CombinedTextureSampler(c),
+                            index: texture,
+                        };
+                        assert_eq!(combined.separate_texture_of(), None);
+                        pairs.push((combined, s));
+                    }
+                    assert_eq!(
+                        ResourceSlot::separate_texture(Stage::Fragment, 1 << 28, c),
+                        None
+                    );
+                    assert_eq!(
+                        ResourceSlot::separate_texture(Stage::Fragment, u32::MAX, c),
+                        None
+                    );
+                }
+            }
+        }
+        let mut by_combined = pairs.clone();
+        by_combined.sort_by_key(|p| p.0);
+        let mut by_separate = pairs;
+        by_separate.sort_by_key(|p| p.1);
+        assert_eq!(by_combined, by_separate);
+    }
+
+    fn slot(class: SlotClass, index: u32) -> SlotRef {
+        SlotRef {
+            stage: Stage::Kernel,
+            class,
+            index,
+        }
+    }
+
+    /// The fixed kind order is the derived `Ord`; within a kind, fields order by slot.
+    #[test]
+    fn push_fields_order_by_d13_kind_order() {
+        let ordered = [
+            PushField::ArgumentTableAddress,
+            PushField::RootTableAddress,
+            PushField::ExecutionStatusAddress,
+            PushField::CaptureIndexAddress,
+            PushField::DispatchRegion,
+            PushField::ReplayRegionAddress,
+            PushField::BaseVertexInstance,
+            PushField::VerticesPerPrimitive,
+            PushField::SlotBindOffset(slot(SlotClass::Buffer, 0)),
+            PushField::SlotBindOffset(slot(SlotClass::Buffer, 7)),
+            PushField::SlotGuestBase(slot(SlotClass::Buffer, 0)),
+            PushField::VertexBufferStride(0),
+            PushField::VertexBufferStride(3),
+            PushField::CaptureLayout,
+        ];
+        let mut shuffled = ordered;
+        shuffled.reverse();
+        shuffled.sort();
+        assert_eq!(shuffled, ordered);
+    }
+
+    #[test]
+    fn metal_slots_map_to_their_binding_kind() {
+        for (class, kind) in [
+            (SlotClass::Buffer, ResourceKind::Buffer),
+            (SlotClass::Texture, ResourceKind::Texture),
+            (SlotClass::Sampler, ResourceKind::Sampler),
+        ] {
+            let r = ResourceSlot::metal(slot(class, 5));
+            assert_eq!(
+                r,
+                ResourceSlot {
+                    stage: Stage::Kernel,
+                    kind,
+                    index: 5
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn symbols_are_send_and_sync() {
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<SlotRef>();
+        send_sync::<ResourceSlot>();
+        send_sync::<HandleClass>();
+        send_sync::<VaryingKey>();
+        send_sync::<SpecKey>();
+        send_sync::<PushField>();
+        send_sync::<Symbol>();
+    }
+}

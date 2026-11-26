@@ -1,0 +1,67 @@
+//! The notes of a fragment function's color outputs that Metal may store otherwise than the
+//! function computes them. Nothing here changes what the function computes: each output is its own
+//! arithmetic, rounded as the AIR says.
+//!
+//! **A `half` color output** ([`note_half_output`]). Metal's compiler may carry an output's last
+//! operation at `float` precision into the attachment, the blend and the format's conversion, where
+//! the function rounds it to `half` first (an M4 under macOS 27.0.1 and the M3 Max under macOS
+//! 26.7: under fast math a product, a sum or difference, or a fused multiply-add of `half`s with no
+//! other use, into a 32-bit float attachment). The note follows the module's math mode: a module
+//! compiled with fast math records `PrecisionNote::HalfOutputFastMathBlend`, where Metal's
+//! compiler, folding the blend into the function, reads the output's `float` or its `half` and fuses
+//! or regroups the blend per pipeline, so no fixed form is Metal's; any other module (without fast
+//! math, or naming no mode) records `PrecisionNote::HalfOutputPrecision`.
+//!
+//! A module without fast math (`air.compile.fast_math_disable`) records no note itself: Metal
+//! stores the `half` it returns, so only a blend can store another value. It lists the attachment
+//! (`StageIo::half_blend_colors`), and the pipeline's stage records
+//! `PrecisionNote::HalfOutputPrecision` where that attachment blends
+//! (`color_writes::blends_output`). A module with fast math lists an attachment it reaches as a
+//! color attachment too (`StageIo::half_fast_colors`), and the pipeline's stage records
+//! `PrecisionNote::HalfOutputFastMathBlend` where that attachment stores some channel
+//! (`color_writes::stores_output`): one whose write mask stores none holds nothing the output could
+//! differ by. A module naming no math mode keeps the note at any attachment: what Metal's compiler
+//! does there was not measured.
+
+use crate::lower::select::SelectCx;
+use crate::pipeline::artifact::PrecisionNote;
+
+/// The note a `half` color output records where Metal may hand it to the attachment otherwise
+/// than the function stores it (the module docs): `PrecisionNote::HalfOutputFastMathBlend` in a
+/// module compiled with fast math (`air.compile.fast_math_enable`), whose blend Metal's compiler
+/// fuses and regroups per pipeline; `PrecisionNote::HalfOutputPrecision` in any other, a module
+/// that names no math mode too (no module is taken into the fast-math class unless it states
+/// fast math).
+pub(crate) fn half_output_note(cx: &SelectCx<'_>) -> PrecisionNote {
+    match cx.entry.compile.fast_math {
+        Some(true) => PrecisionNote::HalfOutputFastMathBlend,
+        Some(false) | None => PrecisionNote::HalfOutputPrecision,
+    }
+}
+
+/// Record that a `half` color output reaches attachment `color` where Metal may store it otherwise
+/// than the function: in a module compiled without fast math (`air.compile.fast_math_disable`)
+/// the attachment itself (`StageIo::half_blend_colors`), whose note the pipeline decides by
+/// whether the attachment blends, since Metal stores the `half` the function returns wherever it
+/// does not (the sweep: the `half4` output and a `float4` of its `half` store alike
+/// under every blend and format); in a module compiled with fast math the attachment too
+/// (`StageIo::half_fast_colors`), whose note the pipeline decides by whether the attachment stores
+/// some channel, since one that stores none (its write mask none, or absent from the pipeline)
+/// holds nothing the output could differ by; in a module naming no math mode
+/// [`half_output_note`] itself.
+pub(crate) fn note_half_output(cx: &mut SelectCx<'_>, color: u32) {
+    let math = cx.entry.compile.fast_math;
+    if math.is_none() {
+        let note = half_output_note(cx);
+        cx.precision.insert(note);
+        return;
+    }
+    let io = &mut cx.families.stage_io.interface;
+    let colors = match math {
+        Some(false) => &mut io.half_blend_colors,
+        _ => &mut io.half_fast_colors,
+    };
+    if let Err(at) = colors.binary_search(&color) {
+        colors.insert(at, color);
+    }
+}

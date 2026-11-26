@@ -1,0 +1,122 @@
+{
+  "format": 1,
+  "case": "handler-waits-scheduled-until-completed",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": {
+        "never_returned": {
+          "from": "a Metal probe of waits from a command buffer's own handlers, on an Apple M4",
+          "call": "addScheduledHandler/waitUntilCompleted"
+        }
+      },
+      "device": "apple-m4",
+      "runs": 1,
+      "outcomes": [
+        {
+          "runs": 1,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "wait",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ecabd284d14e5f0d60fab6516fabb2508f52eb8ef3eb4ff7889c4e0eeeefe541"
+                        }
+                      }
+                    },
+                    {
+                      "name": "command-buffer",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d490f85e91dad7f435df667667005be4da495cc9176f4797331a937872cefbc3"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "addScheduledHandler/waitUntilCompleted",
+                  "observed": {
+                    "value": {
+                      "nothing": "never_returned"
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "not_run"
+    }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 3.18 and ours at 2.63; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 236,
+      "times": {
+        "case": "handler-waits-scheduled-until-completed",
+        "calls": 0,
+        "in_calls": 0,
+        "on_cpu": 0,
+        "blocked": 0,
+        "elsewhere": 0,
+        "spend": 0,
+        "spend_least": 0,
+        "spend_most": 0,
+        "stopped": "Metal does not return from addScheduledHandler/waitUntilCompleted: a scheduled handler's wait for its own command buffer's completion never returns: Metal does not detect it, the handler's thread stays inside the call, and the command buffer whose handler it is cannot complete while it is there",
+        "per_call": []
+      }
+    }
+  ]
+}

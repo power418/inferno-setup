@@ -1,0 +1,332 @@
+/*
+ * Patcher.
+ *
+ * Copyright (c) 2026 Visual Ehrmanntraut (VisualEhrmanntraut).
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+#include "macho.hpp"
+#include "parse.hpp"
+#include "storage.hpp"
+#include <array>
+#include <filesystem>
+#include <fstream>
+#include <glib.h>
+#include <iostream>
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+class Patcher
+{
+    std::map<FileRef, std::map<std::streamoff, std::vector<std::uint8_t>>> write_queue;
+    std::map<FileRef, FileRef>                                             detached_sigs;
+
+    static constexpr std::uint32_t CS_MAGIC_EMBEDDED_SIGNATURE = 0xFADE0CC0;
+    static constexpr std::uint32_t CS_MAGIC_CODEDIRECTORY      = 0xFADE0C02;
+    static constexpr std::uint32_t CS_SUPPORTSCODELIMIT64      = 0x20300;
+
+    static auto be32(const std::vector<std::uint8_t>& buf, const std::size_t off) -> std::uint32_t
+    {
+        if (off + 4 > buf.size()) { throw std::out_of_range("code signature is truncated"); }
+        return (std::uint32_t(buf[off]) << 24) | (std::uint32_t(buf[off + 1]) << 16)
+               | (std::uint32_t(buf[off + 2]) << 8) | std::uint32_t(buf[off + 3]);
+    }
+
+    static auto be64(const std::vector<std::uint8_t>& buf, const std::size_t off) -> std::uint64_t
+    { return (std::uint64_t(be32(buf, off)) << 32) | be32(buf, off + 4); }
+
+    static auto page_hash(const std::uint8_t hash_type, const std::vector<std::uint8_t>& page)
+        -> std::vector<std::uint8_t>
+    {
+        GChecksumType type;
+        switch (hash_type) {
+            case 1 : type = G_CHECKSUM_SHA1; break;      // CS_HASHTYPE_SHA1
+            case 2 :                                     // CS_HASHTYPE_SHA256
+            case 3 : type = G_CHECKSUM_SHA256; break;    // CS_HASHTYPE_SHA256_TRUNCATED
+            case 4 : type = G_CHECKSUM_SHA384; break;    // CS_HASHTYPE_SHA384
+            default: throw std::runtime_error("unsupported code directory hash type " + std::to_string(hash_type));
+        }
+
+        auto* const               sum = g_checksum_new(type);
+        std::vector<std::uint8_t> digest(64);
+        gsize                     digest_len = digest.size();
+        g_checksum_update(sum, page.data(), gssize(page.size()));
+        g_checksum_get_digest(sum, digest.data(), &digest_len);
+        g_checksum_free(sum);
+        digest.resize(digest_len);
+        return digest;
+    }
+
+    void rehash_code_directory(const FileRef& ref, std::iostream& file, const std::vector<std::uint8_t>& sig,
+                               const std::streamoff sig_off, const std::size_t cd_off,
+                               std::vector<std::pair<std::streamoff, std::vector<std::uint8_t>>>& out)
+    {
+        const auto& entries    = this->write_queue.at(ref);
+        const auto  version    = be32(sig, cd_off + 0x8);
+        const auto  hash_off   = be32(sig, cd_off + 0x10);
+        const auto  code_slots = be32(sig, cd_off + 0x1C);
+        const auto  hash_size  = sig.at(cd_off + 0x24);
+        const auto  hash_type  = sig.at(cd_off + 0x25);
+        const auto  page_size  = std::uint64_t(1) << sig.at(cd_off + 0x27);
+        auto        code_limit = std::uint64_t(be32(sig, cd_off + 0x20));
+        if (version >= CS_SUPPORTSCODELIMIT64 && be64(sig, cd_off + 0x38) != 0) {
+            code_limit = be64(sig, cd_off + 0x38);
+        }
+
+        std::set<std::uint64_t> pages;
+        for (const auto& entry : entries) {
+            const auto start = std::uint64_t(entry.first);
+            const auto end   = start + entry.second.size();
+            if (end > code_limit) {
+                throw std::runtime_error("write at " + std::to_string(start) + " in `" + ref.string()
+                                         + "` is not covered by its code signature");
+            }
+            for (auto page = start / page_size; page * page_size < end; ++page) { pages.emplace(page); }
+        }
+
+        for (const auto page : pages) {
+            if (page >= code_slots) { throw std::out_of_range("page " + std::to_string(page) + " has no hash slot"); }
+
+            const auto                page_off = page * page_size;
+            std::vector<std::uint8_t> data(std::min(page_size, code_limit - page_off));
+            read_stream(seek_stream(file, std::streamoff(page_off)), data.data(), std::streamsize(data.size()));
+
+            const auto slot_off = cd_off + hash_off + page * hash_size;
+            if (slot_off + hash_size > sig.size()) { throw std::out_of_range("code directory is truncated"); }
+            auto old_hash = page_hash(hash_type, data);
+            old_hash.resize(hash_size);
+            if (!std::equal(old_hash.begin(), old_hash.end(), sig.begin() + std::ptrdiff_t(slot_off))) {
+                throw std::runtime_error("page " + std::to_string(page) + " of `" + ref.string()
+                                         + "` does not match its code directory hash");
+            }
+
+            for (const auto& entry : entries) {
+                const auto start = std::max(std::uint64_t(entry.first), page_off);
+                const auto end   = std::min(std::uint64_t(entry.first) + entry.second.size(), page_off + data.size());
+                if (start >= end) { continue; }
+                std::copy(entry.second.begin() + std::ptrdiff_t(start - std::uint64_t(entry.first)),
+                          entry.second.begin() + std::ptrdiff_t(end - std::uint64_t(entry.first)),
+                          data.begin() + std::ptrdiff_t(start - page_off));
+            }
+
+            auto new_hash = page_hash(hash_type, data);
+            new_hash.resize(hash_size);
+            out.emplace_back(sig_off + std::streamoff(slot_off), std::move(new_hash));
+        }
+    }
+
+public:
+    static bool revert(const FileRef& file)
+    {
+        struct Entry
+        {
+            std::streamoff            off;
+            std::vector<std::uint8_t> orig;
+            std::vector<std::uint8_t> patched;
+        };
+
+        const auto orig_bytes_path = file.orig_bytes_path();
+
+        if (!std::filesystem::exists(orig_bytes_path)) { return false; }
+
+        std::ifstream orig_bytes_file(orig_bytes_path);
+        if (!orig_bytes_file || !orig_bytes_file.is_open()) {
+            throw std::runtime_error("failed to open orig bytes file at `" + orig_bytes_path.string() + '`');
+        }
+
+        std::vector<Entry> entries;
+        bool               patched = false;
+        std::string        token;
+        while (orig_bytes_file >> token) {
+            if (token.back() == ':') {
+                entries.push_back({std::stoll(token.substr(0, token.size() - 1), nullptr, 16), {}, {}});
+                patched = false;
+                continue;
+            }
+            if (entries.empty()) { throw std::runtime_error("malformed revert file; byte before an offset"); }
+            if (token == "|") {
+                patched = true;
+                continue;
+            }
+            const auto value = std::stoi(token, nullptr, 16);
+            const auto byte  = std::uint8_t(value & 0xFF);
+            if (byte != value) { throw std::runtime_error("malformed revert file; byte too large"); }
+            (patched ? entries.back().patched : entries.back().orig).push_back(byte);
+        }
+        orig_bytes_file.close();
+
+        auto stream = file.open(std::ios::in | std::ios::out);
+
+        for (const auto& entry : entries) {
+            if (entry.patched.empty()) { continue; }
+            std::vector<std::uint8_t> current(entry.patched.size());
+            try {
+                read_stream(seek_stream(stream, entry.off), current.data(), std::streamsize(current.size()));
+            }
+            catch (const std::exception&) {
+                current.clear();
+            }
+            if (current != entry.patched) {
+                std::cout << file.string() << " changed since it was patched, dropping its revert file.\n";
+                std::filesystem::remove(orig_bytes_path);
+                return false;
+            }
+        }
+
+        bool changed = false;
+        for (const auto& entry : entries) {
+            stream.clear();
+            stream.seekp(entry.off);
+            if (!stream) { throw std::runtime_error("failed to seek to offset (malformed revert file?)"); }
+            stream.write(reinterpret_cast<const char*>(entry.orig.data()), std::streamsize(entry.orig.size()));
+            if (!stream) { throw std::runtime_error("failed to restore bytes (malformed revert file?)"); }
+            changed |= !entry.orig.empty();
+        }
+
+        stream.flush();
+        std::filesystem::remove(orig_bytes_path);
+
+        return changed;
+    }
+
+    void write(const FileRef& file, const std::streamoff file_off, const std::uint8_t* bytes, const std::size_t nbytes)
+    { this->write_queue[file].emplace(file_off, std::vector(bytes, bytes + nbytes)); }
+
+    template<const std::size_t N>
+    void write(const FileRef& file, const std::streamoff file_off, const std::array<std::uint8_t, N> bytes)
+    { this->write(file, file_off, bytes.data(), N); }
+
+    /// The code signature of `file` is in `sig`, to be rehashed along with it.
+    void sign_detached(const FileRef& file, const FileRef& sig) { this->detached_sigs.emplace(file, sig); }
+
+    void rehash()
+    {
+        std::vector<std::pair<const FileRef*, std::vector<std::pair<std::streamoff, std::vector<std::uint8_t>>>>>
+            pending;
+
+        for (const auto& cache_entries : this->write_queue) {
+            auto                      file = cache_entries.first.open();
+            const FileRef*            sig_ref;
+            std::streamoff            sig_off;
+            std::vector<std::uint8_t> sig;
+
+            if (const auto detached = this->detached_sigs.find(cache_entries.first);
+                detached != this->detached_sigs.end())
+            {
+                auto sig_file = detached->second.open();
+                sig_file.seekg(0, std::ios::end);
+                sig.resize(std::size_t(sig_file.tellg()));
+                read_stream(seek_stream(sig_file, 0), sig.data(), std::streamsize(sig.size()));
+                sig_ref = &detached->second;
+                sig_off = 0;
+            }
+            else if (read_cstrn(seek_stream(file, 0), 4) == "dyld") {
+                sig_off             = std::streamoff(read_u64_le(seek_stream(file, 0x28)));
+                const auto sig_size = read_u64_le(file);
+                sig.resize(sig_size);
+                read_stream(seek_stream(file, sig_off), sig.data(), std::streamsize(sig.size()));
+                sig_ref = &cache_entries.first;
+            }
+            else if (read_u32_le(seek_stream(file, 0)) == MH_MAGIC_64) {
+                const MachHeader header(seek_stream(file, 0));
+                if (!header.code_signature) { continue; }
+                sig_off = std::streamoff(header.code_signature->data_off);
+                sig.resize(header.code_signature->data_size);
+                read_stream(seek_stream(file, sig_off), sig.data(), std::streamsize(sig.size()));
+                sig_ref = &cache_entries.first;
+            }
+            else {
+                continue;
+            }
+
+            if (be32(sig, 0) != CS_MAGIC_EMBEDDED_SIGNATURE) {
+                throw std::runtime_error("`" + cache_entries.first.string() + "` has no code signature");
+            }
+
+            decltype(pending)::value_type::second_type hashes;
+            const auto                                 count = be32(sig, 8);
+            try {
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    const auto blob_off = be32(sig, 12 + std::size_t(i) * 8 + 4);
+                    if (be32(sig, blob_off) == CS_MAGIC_CODEDIRECTORY) {
+                        this->rehash_code_directory(cache_entries.first, file, sig, sig_off, blob_off, hashes);
+                    }
+                }
+            }
+            catch (const std::exception& e) {
+                if (sig_ref == &cache_entries.first) { throw; }
+                std::cerr << "Warning: not rehashing " << sig_ref->string() << ": " << e.what() << ".\n";
+                continue;
+            }
+            pending.emplace_back(sig_ref, std::move(hashes));
+        }
+
+        for (auto& [sig_ref, hashes] : pending) {
+            auto& entries = this->write_queue[*sig_ref];
+            for (auto& hash : hashes) { entries.emplace(hash.first, std::move(hash.second)); }
+        }
+    }
+
+    void print_changes() const
+    {
+        for (const auto& cache_entries : this->write_queue) {
+            std::cout << "  " << cache_entries.first.string() << ":\n";
+            for (const auto& entry : cache_entries.second) {
+                std::cout << "    " << entry.first << ": ";
+                for (const auto byte : entry.second) { std::cout << std::uint16_t(byte) << ' '; }
+                std::cout << '\n';
+            }
+        }
+    }
+
+    void flush() const
+    {
+        for (const auto& cache_entries : this->write_queue) {
+            auto          cache_file      = cache_entries.first.open(std::ios::in | std::ios::out);
+            const auto    orig_bytes_path = cache_entries.first.orig_bytes_path();
+            std::ofstream diff_file(orig_bytes_path, std::ios::out | std::ios::trunc);
+            if (!diff_file.is_open()) {
+                throw std::runtime_error("failed to open orig bytes file suffix=" + cache_entries.first.string());
+            }
+            diff_file << std::hex;
+            for (const auto& entry : cache_entries.second) {
+                seek_stream(cache_file, entry.first);
+                std::vector<std::uint8_t> orig_bytes(entry.second.size());
+                read_stream(cache_file, orig_bytes.data(), std::streamsize(orig_bytes.size()));
+                cache_file.seekp(entry.first);
+                if (!cache_file) {
+                    throw std::runtime_error("failed to seek cache file to " + std::to_string(entry.first));
+                }
+                cache_file.write(reinterpret_cast<const char*>(entry.second.data()),
+                                 std::streamsize(entry.second.size()));
+                if (!cache_file) {
+                    throw std::runtime_error("failed to write " + std::to_string(entry.second.size())
+                                             + " cache file bytes to " + std::to_string(entry.first));
+                }
+                diff_file << entry.first << ": ";
+                for (const auto byte : orig_bytes) { diff_file << std::uint16_t(byte) << ' '; }
+                diff_file << "| ";
+                for (const auto byte : entry.second) { diff_file << std::uint16_t(byte) << ' '; }
+                diff_file << '\n';
+            }
+            cache_file.flush();
+            diff_file.flush();
+        }
+    }
+};

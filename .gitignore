@@ -9,3 +9,7 @@
 __pycache__/
 inferno-vgpu/target/
 inferno-vgpu/guest/bundle/build/
+vendor/Inferno/build/
+vendor/Inferno/.xmake/
+vendor/Inferno/target/
+vendor/metal2vulkan/target/

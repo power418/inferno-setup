@@ -1,0 +1,372 @@
+//! A uniform view's load that every trip of its loop reads alike, at the top of every trip, leaves
+//! the loop, and every other load stays; the kernel computes the same either way.
+
+use super::*;
+use crate::budget::Budget;
+use crate::device::profile::DeviceProfile;
+use crate::memory::views::{declare_at, read_word, View};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
+use crate::spirv::builder::constructs::{ArmEnd, LoopSpec};
+use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
+use crate::spirv::error::BResult;
+use crate::spirv::ids::GlobalId;
+use crate::spirv::interp::{run, Buffer, Config, Resources};
+use crate::spirv::ir::{
+    natural_layout, BinOp, ConstBits, Constant, ExecMode, ExecModel, LayoutRule, MemAccess,
+};
+use crate::spirv::testing::{assert_valid, committed_profiles};
+
+fn meter() -> Meter {
+    Meter::new(&Budget::default())
+}
+
+fn slot(index: u32) -> ResourceSlot {
+    ResourceSlot {
+        stage: Stage::Kernel,
+        kind: ResourceKind::Buffer,
+        index,
+    }
+}
+
+fn lavapipe() -> DeviceProfile {
+    committed_profiles()
+        .expect("profiles")
+        .into_iter()
+        .find(|(s, _)| s == "lavapipe")
+        .expect("lavapipe")
+        .1
+}
+
+fn c32(f: &mut FunctionBuilder<'_>, v: u32) -> Value {
+    let c = f.u32_const(v).expect("constant");
+    f.module().const_value(c).expect("value")
+}
+
+/// Word `i` of the `{ u32 words[]; }` or `{ u32 words[N]; }` block `buf`.
+fn word(f: &mut FunctionBuilder<'_>, buf: GlobalId, i: Value) -> BResult<Value> {
+    let zero = c32(f, 0);
+    let base = f.module().global_value(buf)?;
+    let p = f.access_chain(base, &[zero, i])?;
+    f.load(p, MemAccess::default())
+}
+
+fn store_word(f: &mut FunctionBuilder<'_>, buf: GlobalId, i: Value, v: Value) -> BResult<()> {
+    let zero = c32(f, 0);
+    let base = f.module().global_value(buf)?;
+    let p = f.access_chain(base, &[zero, i])?;
+    f.store(p, v, MemAccess::default())
+}
+
+/// What [`kernel`]'s loop reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// `p[k + 2]` on odd trips and `p[3]` on even ones, each under its own branch.
+    Guarded,
+    /// `p[1]` at the top of every trip, before the trip test.
+    AtTop,
+    /// `p[i & 7]` at the top of every trip: a word that changes from trip to trip.
+    ByTrip,
+    /// [`Shape::AtTop`], with `out[i + 1] = i` stored on every trip.
+    StoresInLoop,
+    /// [`Shape::AtTop`], with `out[1] = n` stored before the loop.
+    StoresBefore,
+    /// `in[k + 2]` at the top of every trip, from the storage buffer.
+    FromStorage,
+}
+
+/// A uniform view at `sym`: a `Uniform` block `{ u32 words[8]; }` (std430 in `Uniform`, under
+/// `uniformBufferStandardLayout`), read through `memory::views` as a storage view's words are.
+fn uniform_words(mb: &mut ModuleBuilder, sym: ResourceSlot) -> BResult<View> {
+    let u32_ty = mb.ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let len = mb.constant(Constant::Scalar {
+        ty: u32_ty,
+        bits: ConstBits(8),
+    })?;
+    let member = mb.ty(Type::Array {
+        elem: u32_ty,
+        len,
+        stride: Some(4),
+    })?;
+    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[member])?;
+    let block = mb.ty(Type::Struct {
+        members: [member].into(),
+        layout: Some(layout),
+    })?;
+    let global = mb.resource(sym, StorageClass::Uniform, block)?;
+    Ok(View { global, u32_ty })
+}
+
+/// `p` the uniform view (slot 1) of 8 words, `in` and `out` storage buffers (slots 0 and 2):
+/// `n = in[0]`, `k = in[1]`, then `acc` summed over `n` trips as `shape` says, and `out[0] = acc`.
+fn kernel(shape: Shape) -> TypedModule {
+    let mut b = ModuleBuilder::new();
+    let input = declare_at(&mut b, slot(0)).expect("in").global;
+    let p = uniform_words(&mut b, slot(1)).expect("p");
+    let out = declare_at(&mut b, slot(2)).expect("out").global;
+    let void = b.ty(Type::Void).expect("void");
+    let mut f = b.function(void).expect("function");
+    let body = |f: &mut FunctionBuilder<'_>| -> BResult<()> {
+        let u32_ = f.module().ty(Type::Int {
+            width: 32,
+            signed: false,
+        })?;
+        let zero = c32(f, 0);
+        let one = c32(f, 1);
+        let n = word(f, input, zero)?;
+        let k = word(f, input, one)?;
+        if shape == Shape::StoresBefore {
+            store_word(f, out, one, n)?;
+        }
+        let z = f.u32_const(0)?;
+        let acc = f.local_var(u32_, Some(z))?;
+        let i = f.local_var(u32_, Some(z))?;
+        let (ap, ip) = (f.var_ptr(acc)?, f.var_ptr(i)?);
+        f.loop_(
+            &mut (),
+            LoopSpec::default(),
+            Box::new(move |f, _, lc| {
+                let t = f.load(ip, MemAccess::default())?;
+                let a = f.load(ap, MemAccess::default())?;
+                let top = match shape {
+                    Shape::AtTop | Shape::StoresInLoop | Shape::StoresBefore => {
+                        let one = c32(f, 1);
+                        Some(read_word(f, p, one)?)
+                    }
+                    Shape::ByTrip => {
+                        let seven = c32(f, 7);
+                        let at = f.binary(BinOp::BitwiseAnd, t, seven)?;
+                        Some(read_word(f, p, at)?)
+                    }
+                    Shape::FromStorage => {
+                        let two = c32(f, 2);
+                        let at = f.binary(BinOp::IAdd, k, two)?;
+                        Some(word(f, input, at)?)
+                    }
+                    Shape::Guarded => None,
+                };
+                let done = f.binary(BinOp::UGreaterThanEqual, t, n)?;
+                f.if_(
+                    &mut (),
+                    done,
+                    Box::new(|f, _| {
+                        lc.break_(f)?;
+                        Ok(ArmEnd::Exits)
+                    }),
+                    None,
+                )?;
+                let add = match top {
+                    Some(w) => w,
+                    None => {
+                        let one = c32(f, 1);
+                        let odd = f.binary(BinOp::BitwiseAnd, t, one)?;
+                        let odd = f.binary(BinOp::INotEqual, odd, zero)?;
+                        let merged = f.if_(
+                            &mut (),
+                            odd,
+                            Box::new(move |f, _| {
+                                let two = c32(f, 2);
+                                let at = f.binary(BinOp::IAdd, k, two)?;
+                                Ok(ArmEnd::FallThrough(vec![read_word(f, p, at)?]))
+                            }),
+                            Some(Box::new(move |f, _| {
+                                let three = c32(f, 3);
+                                Ok(ArmEnd::FallThrough(vec![read_word(f, p, three)?]))
+                            })),
+                        )?;
+                        *merged.0.first().expect("phi")
+                    }
+                };
+                if shape == Shape::StoresInLoop {
+                    let one = c32(f, 1);
+                    let at = f.binary(BinOp::IAdd, t, one)?;
+                    store_word(f, out, at, t)?;
+                }
+                let a1 = f.binary(BinOp::IAdd, a, add)?;
+                f.store(ap, a1, MemAccess::default())?;
+                let one = c32(f, 1);
+                let t1 = f.binary(BinOp::IAdd, t, one)?;
+                f.store(ip, t1, MemAccess::default())
+            }),
+        )?;
+        let total = f.load(ap, MemAccess::default())?;
+        store_word(f, out, zero, total)?;
+        f.ret(None)
+    };
+    body(&mut f).expect("body");
+    let main = f.finish().expect("finish");
+    b.entry(
+        ExecModel::GLCompute,
+        main,
+        vec![ExecMode::LocalSize { x: 1, y: 1, z: 1 }],
+    )
+    .expect("entry");
+    b.finalize().expect("finalize")
+}
+
+/// The loads of uniform views in each block of `m`, by block.
+fn uniform_loads(m: &TypedModule) -> Vec<(BlockId, usize)> {
+    let s = Scratch {
+        body: Vec::new(),
+        reach: Vec::new(),
+        seen: Vec::new(),
+        movable: Vec::new(),
+        stamp: 0,
+        preds: Vec::new(),
+        pos: {
+            let mut pos = vec![u32::MAX; m.values.len()];
+            for b in &m.blocks {
+                for (i, n) in b.insts.iter().enumerate() {
+                    if let Some(r) = n.result {
+                        pos[r.index()] = i as u32;
+                    }
+                }
+            }
+            pos
+        },
+    };
+    m.blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let n = b
+                .insts
+                .iter()
+                .filter(|n| matches!(n.inst, Inst::Load { ptr, .. } if uniform_view(m, &s, ptr)))
+                .count();
+            (BlockId::new(i as u32), n)
+        })
+        .filter(|&(_, n)| n > 0)
+        .collect()
+}
+
+fn resources(input: &[u32], p: &[u32]) -> Resources {
+    let bytes = |w: &[u32]| w.iter().flat_map(|w| w.to_le_bytes()).collect();
+    Resources {
+        buffers: vec![
+            Buffer {
+                slot: Some(slot(0)),
+                address: None,
+                bytes: bytes(input),
+            },
+            Buffer {
+                slot: Some(slot(1)),
+                address: None,
+                bytes: bytes(p),
+            },
+            Buffer {
+                slot: Some(slot(2)),
+                address: None,
+                bytes: vec![0; 16 * 4],
+            },
+        ],
+        push: Vec::new(),
+        spec: Default::default(),
+    }
+}
+
+fn out_word(m: &TypedModule, input: &[u32], p: &[u32]) -> u32 {
+    let r = run(m, &Config::default(), resources(input, p)).expect("run");
+    let b = &r.buffers[2];
+    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
+/// Hoist `shape`'s kernel; returns the moves, the kernel before and after.
+fn hoisted(shape: Shape) -> (u32, TypedModule, TypedModule) {
+    let before = kernel(shape);
+    let mut after = before.clone();
+    let moved = hoist_uniform_loads(&mut after, &mut meter()).expect("hoist");
+    assert_valid(after.clone(), &lavapipe());
+    (moved, before, after)
+}
+
+/// A guarded load, which runs on some trips only, stays; a load at the top of every trip leaves,
+/// and the kernel sums the same words.
+#[test]
+fn only_a_load_every_entry_runs_leaves() {
+    let (moved, _, after) = hoisted(Shape::Guarded);
+    assert_eq!(moved, 0);
+    assert!(!uniform_loads(&after)
+        .iter()
+        .any(|&(b, _)| b == after.loops()[0].preheader));
+    let (moved, before, after) = hoisted(Shape::AtTop);
+    assert_eq!(moved, 1);
+    let p = [0, 7, 0, 0, 0, 0, 0, 0];
+    for n in [0, 1, 3] {
+        assert_eq!(out_word(&before, &[n, 0], &p), 7 * n);
+        assert_eq!(out_word(&after, &[n, 0], &p), 7 * n);
+    }
+}
+
+/// At the top of every trip, a load whose word changes from trip to trip, a load in a loop that
+/// stores to a buffer, one after a store to a buffer before the loop, and a load of a storage
+/// buffer all stay.
+#[test]
+fn loads_a_trip_or_a_buffer_write_may_change_stay() {
+    for shape in [
+        Shape::ByTrip,
+        Shape::StoresInLoop,
+        Shape::StoresBefore,
+        Shape::FromStorage,
+    ] {
+        let (moved, _, after) = hoisted(shape);
+        assert_eq!(moved, 0, "{shape:?}");
+        assert!(
+            !uniform_loads(&after)
+                .iter()
+                .any(|&(b, _)| b == after.loops()[0].preheader),
+            "{shape:?}"
+        );
+    }
+}
+
+/// No module holds a `Uniform` resource that is not a `Block` (what `BufferBlock` decorates in
+/// old SPIR-V: a writable buffer; the crate's grammar names no `BufferBlock`): the builder refuses
+/// one. A `Uniform` block is a view.
+#[test]
+fn only_a_block_is_a_uniform_view() {
+    let mut b = ModuleBuilder::new();
+    let u32_ = b
+        .ty(Type::Int {
+            width: 32,
+            signed: false,
+        })
+        .expect("u32");
+    let eight = b
+        .constant(Constant::Scalar {
+            ty: u32_,
+            bits: ConstBits(8),
+        })
+        .expect("8");
+    let arr = b
+        .ty(Type::Array {
+            elem: u32_,
+            len: eight,
+            stride: Some(4),
+        })
+        .expect("array");
+    let layout = natural_layout(b.types(), LayoutRule::Std430, false, &[arr]).expect("layout");
+    let st = b
+        .ty(Type::Struct {
+            members: [arr].into(),
+            layout: Some(layout),
+        })
+        .expect("struct");
+    assert!(b.resource(slot(1), StorageClass::Uniform, st).is_err());
+    let k = kernel(Shape::Guarded);
+    let s = Scratch {
+        body: Vec::new(),
+        reach: Vec::new(),
+        seen: Vec::new(),
+        movable: Vec::new(),
+        stamp: 0,
+        preds: Vec::new(),
+        pos: Vec::new(),
+    };
+    let view = (k.globals.iter())
+        .find(|g| g.class == StorageClass::Uniform)
+        .expect("the view");
+    assert!(uniform_view(&k, &s, view.value));
+}
