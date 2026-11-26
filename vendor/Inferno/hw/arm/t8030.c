@@ -528,6 +528,17 @@ static void t8030_update_device_tree(MachineState* machine, AppleDTNode* root)
         apple_dt_set_prop(node, "reg", sizeof(pvgpu_reg), pvgpu_reg);
         apple_dt_set_prop_u32(node, "interrupts", 0x210);
     }
+    if (t8030->pvgpu_firmware.valid) {
+        inferno_pvgpu_fw_apply_dt(&t8030->pvgpu_firmware, root);
+    }
+}
+
+static void t8030_post_kernel_load(MachineState* machine, MachoHeader64* kc)
+{
+    AppleT8030MachineState* t8030 = APPLE_T8030(machine);
+    if (t8030->pvgpu_firmware.valid) {
+        inferno_pvgpu_fw_prepare_kernelcache(&t8030->pvgpu_firmware, kc);
+    }
 }
 
 static uint64_t pmgr_unk_e4800            = 0;
@@ -1168,7 +1179,11 @@ static void t8030_init(MachineState* machine)
     t8030->boot_info.num_cpus           = t8030_real_cpu_count(t8030);
     t8030->boot_info.patch_virt         = hwaccel_enabled();
     t8030->boot_info.update_device_tree = t8030_update_device_tree;
+    t8030->boot_info.post_kernel_load   = t8030_post_kernel_load;
     t8030->boot_info.lock_regions       = t8030_lock_regions;
+    if (t8030->pvgpu_fw != NULL && t8030->pvgpu_fw[0] != '\0') {
+        (void)inferno_pvgpu_fw_load(t8030->pvgpu_fw, &t8030->pvgpu_firmware);
+    }
     apple_iboot_init(&t8030->boot_info, machine);
 
     for (i = 0; i < A13_MAX_CLUSTER; ++i) {
@@ -1751,6 +1766,7 @@ PROP_STR_GETTER_SETTER(regulatory_model);
 PROP_VISIT_GETTER_SETTER(uint32, disp_width);
 PROP_VISIT_GETTER_SETTER(uint32, disp_height);
 PROP_STR_GETTER_SETTER(pvgpu_socket);
+PROP_STR_GETTER_SETTER(pvgpu_fw);
 
 static void t8030_class_init(ObjectClass* klass, const void* data)
 {
@@ -1832,6 +1848,10 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     object_property_set_default_str(oprop, "");
     object_class_property_set_description(klass, "pvgpu-socket",
                                           "Unix socket path to inferno-vgpu-server (metal2vulkan)");
+    oprop = object_class_property_add_str(klass, "pvgpu-fw", t8030_get_pvgpu_fw, t8030_set_pvgpu_fw);
+    object_property_set_default_str(oprop, "");
+    object_class_property_set_description(klass, "pvgpu-fw",
+                                          "Path to InfernoVgpu.fw (IVGF) guest firmware/prelink package");
 }
 
 static const TypeInfo t8030_info = {

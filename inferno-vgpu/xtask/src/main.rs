@@ -62,7 +62,8 @@ fn check_testkit_gate(root: &Path) -> Result<(), String> {
 fn check_headers(root: &Path) -> Result<(), String> {
     let wire_h = root.join("crates/inferno-vgpu-graphics/include/inferno_graphics_wire.h");
     let api_h = root.join("crates/inferno-vgpu-c/include/inferno_vgpu.h");
-    for h in [&wire_h, &api_h] {
+    let fw_h = root.join("firmware/include/inferno_firmware_abi.h");
+    for h in [&wire_h, &api_h, &fw_h] {
         if !h.is_file() {
             return Err(format!("missing header: {}", h.display()));
         }
@@ -77,10 +78,27 @@ fn check_headers(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn copy_atomic(src: &Path, dst: &Path) -> Result<(), String> {
+    let tmp = dst.with_extension("tmp");
+    fs::copy(src, &tmp).map_err(|e| format!("copy {} -> {}: {e}", src.display(), tmp.display()))?;
+    fs::rename(&tmp, dst)
+        .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), dst.display()))?;
+    Ok(())
+}
+
 fn dist(root: &Path) -> Result<(), String> {
     run(Command::new("cargo")
         .current_dir(root)
-        .args(["build", "--release", "-p", "inferno-vgpu-c", "-p", "inferno-vgpu-server"]))?;
+        .args([
+            "build",
+            "--release",
+            "-p",
+            "inferno-vgpu-c",
+            "-p",
+            "inferno-vgpu-server",
+            "-p",
+            "inferno-vgpu-firmware",
+        ]))?;
 
     let target_release = root.join("target/release");
     let dist_dir = root.join("target/dist-vulkan");
@@ -103,20 +121,25 @@ fn dist(root: &Path) -> Result<(), String> {
         inc_dir.join("inferno_graphics_wire.h"),
     )
     .map_err(|e| format!("copy inferno_graphics_wire.h: {e}"))?;
+    fs::copy(
+        root.join("firmware/include/inferno_firmware_abi.h"),
+        inc_dir.join("inferno_firmware_abi.h"),
+    )
+    .map_err(|e| format!("copy inferno_firmware_abi.h: {e}"))?;
 
     for name in ["libinferno_vgpu_c.a", "libinferno_vgpu_c.so"] {
         let src = target_release.join(name);
         if src.is_file() {
             let dst_name = name.replace("libinferno_vgpu_c", "libinferno_vgpu");
-            fs::copy(&src, lib_dir.join(&dst_name))
-                .map_err(|e| format!("copy {name}: {e}"))?;
+            copy_atomic(&src, &lib_dir.join(&dst_name))?;
         }
     }
 
-    let srv_src = target_release.join("inferno-vgpu-server");
-    if srv_src.is_file() {
-        fs::copy(&srv_src, bin_dir.join("inferno-vgpu-server"))
-            .map_err(|e| format!("copy inferno-vgpu-server: {e}"))?;
+    for bin_name in ["inferno-vgpu-server", "inferno-vgpu-fw"] {
+        let srv_src = target_release.join(bin_name);
+        if srv_src.is_file() {
+            copy_atomic(&srv_src, &bin_dir.join(bin_name))?;
+        }
     }
 
     let pc_content = format!(

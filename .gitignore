@@ -13,3 +13,5 @@ vendor/Inferno/build/
 vendor/Inferno/.xmake/
 vendor/Inferno/target/
 vendor/metal2vulkan/target/
+inferno-vgpu/firmware/build/
+inferno-vgpu/guest/build/

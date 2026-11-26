@@ -24,6 +24,7 @@
 #include "exec/hwaddr.h"
 #include "hw/arm/a13.h"
 #include "hw/arm/iboot/iboot.h"
+#include "hw/arm/iboot/inferno_pvgpu_boot.h"
 #include "hw/boards.h"
 #include "hw/sysbus.h"
 #include "qapi/qapi-types-usb.h"
@@ -65,5 +66,7 @@ typedef struct
     char*           regulatory_model;
     uint32_t        disp_width;
     uint32_t        disp_height;
-    char*           pvgpu_socket;
+    char*                pvgpu_socket;
+    char*                pvgpu_fw;
+    InfernoPvgpuFirmware pvgpu_firmware;
 } AppleT8030MachineState;

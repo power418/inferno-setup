@@ -1,6 +1,6 @@
-.PHONY: all dist check test test-gpu guest-test clean
+.PHONY: all dist check test test-gpu guest-test firmware sdk-check clean
 
-all: dist
+all: dist firmware
 
 dist:
 	cargo xtask dist
@@ -15,8 +15,15 @@ test-gpu:
 	cargo test --workspace -- --ignored --nocapture
 
 guest-test:
-	$(MAKE) -C guest/bundle host-test
+	$(MAKE) -C guest all
+
+firmware:
+	$(MAKE) -C firmware all
+
+sdk-check:
+	$(MAKE) -C guest sdk-check
 
 clean:
 	cargo clean
-	$(MAKE) -C guest/bundle clean
+	$(MAKE) -C guest clean
+	$(MAKE) -C firmware clean

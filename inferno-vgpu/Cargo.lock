@@ -145,6 +145,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inferno-vgpu-firmware"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sha2 0.10.9",
+ "zerocopy",
+]
+
+[[package]]
 name = "inferno-vgpu-graphics"
 version = "0.1.0"
 dependencies = [

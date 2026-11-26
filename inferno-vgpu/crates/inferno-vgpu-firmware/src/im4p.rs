@@ -1,6 +1,6 @@
 //! Minimal Apple `IMG4` / `IM4P` ASN.1 DER extractor and optional `liblzfse` decoder.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fmt;
 use std::path::Path;
 
@@ -116,11 +116,11 @@ pub fn decode_kernelcache_bytes(
     input: &[u8],
     extra_lzfse_dir: Option<&Path>,
 ) -> Result<Vec<u8>, Im4pError> {
-    if input.len() >= 4 && &input[..4] == &crate::macho::MH_MAGIC_64.to_le_bytes() {
+    if input.len() >= 4 && input[..4] == crate::macho::MH_MAGIC_64.to_le_bytes() {
         return Ok(input.to_vec());
     }
     let im4p = extract_im4p(input)?;
-    if im4p.data.len() >= 4 && &im4p.data[..4] == &crate::macho::MH_MAGIC_64.to_le_bytes() {
+    if im4p.data.len() >= 4 && im4p.data[..4] == crate::macho::MH_MAGIC_64.to_le_bytes() {
         return Ok(im4p.data);
     }
     if im4p.data.len() >= 4 && &im4p.data[..3] == b"bvx" {
@@ -166,8 +166,7 @@ fn decode_lzfse(compressed: &[u8], extra_dir: Option<&Path>) -> Result<Vec<u8>, 
         ));
     }
 
-    let sym_name = CStr::from_bytes_with_nul(b"lzfse_decode_buffer\0")
-        .map_err(|_| Im4pError::LzfseFailed)?;
+    let sym_name = c"lzfse_decode_buffer";
     // SAFETY: `handle` is valid and non-null.
     let sym = unsafe { libc::dlsym(handle, sym_name.as_ptr()) };
     if sym.is_null() {

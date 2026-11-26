@@ -1,0 +1,32 @@
+# Inferno vGPU Guest Firmware & Prelink Package Specification
+# Mirrors reims-vgpu's firmware/prebuilt & guest/prebuilt-arm64e/set.toml layout.
+
+[package]
+format = "IVGF"
+version = 1
+min_ios = "14.0"
+target_soc = "t8030"
+target_arch = "arm64e"
+featureset_class = "MTL2,2"
+
+[[entries]]
+kind = "dt-overlay"
+id = "dev.inferno.pvgpu.dt-overlay"
+source = "dt-overlay.plist"
+required = true
+
+# Uncomment once compiled with an iPhoneOS SDK (macOS Xcode or cross-SDK):
+# [[entries]]
+# kind = "kext"
+# id = "dev.inferno.driver.InfernoVgpuDriver"
+# binary = "../guest/build/InfernoVgpuDriver.kext/InfernoVgpuDriver"
+# plist = "../guest/driver/Info.plist"
+# prelink = true
+# required = true
+#
+# [[entries]]
+# kind = "bundle"
+# id = "dev.inferno.metal.InfernoMetal"
+# binary = "../guest/build/InfernoMetal.bundle/InfernoMetal"
+# target_path = "/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13"
+# required = true

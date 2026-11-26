@@ -66,7 +66,12 @@ main_vm() {
         local sock="${GPU_SERVER_SOCKET:-/run/user/$UID/inferno-gpu.sock}"
         if [ -S "$sock" ]; then
             machine_opts="${machine_opts},pvgpu-socket=${sock}"
-            info "GPU=pv active via $sock"
+            if [ -n "${GPU_FW:-}" ] && [ -f "$GPU_FW" ]; then
+                machine_opts="${machine_opts},pvgpu-fw=${GPU_FW}"
+                info "GPU=pv active via $sock (fw=$GPU_FW)"
+            else
+                info "GPU=pv active via $sock"
+            fi
         else
             warn "GPU=pv set, but $sock is not listening; falling back to framebuffer (GPU=off)"
         fi

@@ -1857,6 +1857,7 @@ static void apple_iboot_load_images(AppleBootInfo* info, AppleIBootOS* os)
     info_report("Kernel virtual high: 0x%016" VADDR_PRIx, kc_end);
 
     ck_patch_kernel(os->kernel, info->kernel_patchset, info->kernel_patches);
+    if (info->post_kernel_load != NULL) { info->post_kernel_load(info->machine, os->kernel); }
     if (info->patch_virt) {
         ck_patch_virt(os->kernel);
         ck_patch_virt_monitor(os->kernel);

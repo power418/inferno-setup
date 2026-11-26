@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>InfernoVgpuDeviceTreeOverlay</key>
+    <dict>
+        <key>Compatible</key>
+        <string>apple,inferno-pvgpu</string>
+        <key>MetalPluginName</key>
+        <string>InfernoMetal</string>
+        <key>TargetAGXBundle</key>
+        <string>/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13</string>
+        <key>FeaturesetClass</key>
+        <string>MTL2,2</string>
+    </dict>
+</dict>
+</plist>

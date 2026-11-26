@@ -644,6 +644,7 @@ namespace
         bool                  unredact_logs = false;
         bool                  no_sw         = false;
         bool                  pvgpu         = false;
+        std::filesystem::path pvgpu_bundle_path;
 
         CLI::App app{"Inferno Filesystem Patcher"};
         argv = app.ensure_utf8(argv);
@@ -657,6 +658,9 @@ namespace
         app.add_flag("--unredact-logs", unredact_logs, "Patch libsystem_trace.dylib to unredact logs");
         app.add_flag("--no-sw", no_sw, "Apply no software rendering patches");
         app.add_flag("--pvgpu", pvgpu, "Preserve Metal rendering paths for apple-pvgpu");
+        app.add_option("--pvgpu-bundle", pvgpu_bundle_path,
+                       "Validate an arm64/arm64e InfernoMetal Mach-O bundle against AGXMetalA13 target")
+            ->check(CLI::ExistingFile);
 
         CLI11_PARSE(app, argc, argv);
 
@@ -728,6 +732,31 @@ namespace
         patcher.rehash();
 
         patcher.print_changes();
+
+        if (!pvgpu_bundle_path.empty()) {
+            std::ifstream bf(pvgpu_bundle_path, std::ios::binary);
+            std::uint32_t hdr[4]{};
+            bf.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
+            if (!bf || hdr[0] != 0xFEEDFACFu || hdr[1] != 0x0100000Cu) {
+                throw std::runtime_error("`--pvgpu-bundle` must be a 64-bit ARM64/ARM64E Mach-O binary");
+            }
+            const auto bundle_size = std::filesystem::file_size(pvgpu_bundle_path);
+            std::cout << "Validated pvgpu Mach-O bundle `" << pvgpu_bundle_path.string() << "` (" << std::dec
+                      << bundle_size << " bytes, subtype=0x" << std::hex << hdr[2] << ", filetype=" << std::dec
+                      << hdr[3] << std::hex << ").\n";
+            try {
+                auto target = storage.open("/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13");
+                target.seekg(0, std::ios::end);
+                const auto target_size = target.tellg();
+                std::cout << "Target `/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13` found in System "
+                             "volume ("
+                          << std::dec << target_size << std::hex << " bytes).\n";
+            }
+            catch (const std::exception&) {
+                std::cerr << "Warning: `/System/Library/Extensions/AGXMetalA13.bundle/AGXMetalA13` not found in "
+                             "System volume.\n";
+            }
+        }
 
         if (!dryRun) {
             std::cout << "Applying changes...\n";
