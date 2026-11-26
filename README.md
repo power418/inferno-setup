@@ -1,4 +1,4 @@
-# Inferno Automation
+# Inferno - iPhone QEMU Virtualization Manager
 
 Automation scripts for [Inferno](https://github.com/ChefKissInc/Inferno) — an iPhone 11 / XR (t8030) emulator built from a heavily modified QEMU.
 
